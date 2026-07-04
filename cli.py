@@ -147,7 +147,7 @@ def cmd_setup_upscaler(args: argparse.Namespace) -> int:
 def _setup_mps(args: argparse.Namespace) -> int:
     import urllib.request
 
-    # Sanity-check torch is importable before we download 64 MB of weights.
+    # Sanity-check torch is importable before we download any weights.
     try:
         import torch  # noqa: F401
     except ImportError:
@@ -157,28 +157,39 @@ def _setup_mps(args: argparse.Namespace) -> int:
         return 2
 
     UP.MPS_VENDOR_DIR.mkdir(parents=True, exist_ok=True)
-    weights = UP.MPS_VENDOR_DIR / UP.MPS_WEIGHTS_FILENAME
-    if weights.exists() and not args.force:
-        print(f"Weights already at {weights}. Re-run with --force to redownload.")
-        return 0
 
-    url = ("https://github.com/xinntao/Real-ESRGAN/releases/"
-           "download/v0.1.0/RealESRGAN_x4plus.pth")
-    print(f"Downloading {url}")
-    try:
-        with urllib.request.urlopen(url, timeout=180) as resp:
-            data = resp.read()
-    except Exception as e:
-        print(f"error: download failed: {e}", file=sys.stderr)
+    # Pick which model files to fetch. Default: both, so the Speed/Quality
+    # toggle in the UI Just Works right after `setup-upscaler` completes.
+    if args.model == "all":
+        wanted = list(UP.MODELS.keys())
+    elif args.model in UP.MODELS:
+        wanted = [args.model]
+    else:
+        print(f"error: unknown --model {args.model!r}. "
+              f"Choose one of: {list(UP.MODELS)}, or 'all'.", file=sys.stderr)
         return 2
-    tmp = weights.with_suffix(".pth.tmp")
-    tmp.write_bytes(data)
-    tmp.replace(weights)
-    print(f"Wrote {weights} ({len(data) / 1024 / 1024:.1f} MB)")
 
-    print("Self-check…")
+    for quality in wanted:
+        spec = UP.MODELS[quality]
+        target = UP.MPS_VENDOR_DIR / spec.mps_weights_filename
+        if target.exists() and not args.force:
+            print(f"[{quality}] already at {target}")
+            continue
+        print(f"[{quality}] downloading {spec.mps_weights_url}")
+        try:
+            with urllib.request.urlopen(spec.mps_weights_url, timeout=180) as resp:
+                data = resp.read()
+        except Exception as e:
+            print(f"error: download failed: {e}", file=sys.stderr)
+            return 2
+        tmp = target.with_suffix(".pth.tmp")
+        tmp.write_bytes(data)
+        tmp.replace(target)
+        print(f"[{quality}] wrote {target} ({len(data) / 1024 / 1024:.1f} MB)")
+
+    print("Self-check (quality)…")
     try:
-        up = UP.MpsUpscaler()
+        up = UP.MpsUpscaler(quality="quality")
     except UP.UpscalerNotAvailable as e:
         print(f"warning: {e}", file=sys.stderr)
         return 1
@@ -331,11 +342,11 @@ def cmd_upscale(args: argparse.Namespace) -> int:
     project = Project.load(args.project)
     client = SF.ScryfallClient()
     try:
-        upscaler = UP.select_upscaler(args.backend)
+        upscaler = UP.select_upscaler(args.backend, quality=args.quality)
     except UP.UpscalerNotAvailable as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    print(f"Backend: {type(upscaler).__name__}")
+    print(f"Backend: {type(upscaler).__name__} (quality={args.quality})")
 
     total = len(project.entries)
     for i, entry in enumerate(project.entries, start=1):
@@ -345,7 +356,8 @@ def cmd_upscale(args: argparse.Namespace) -> int:
         src = client.download_image(front)
         print(f"[{i}/{total}] upscaling {entry.name}")
         out = UP.upscale_image(src, front.scryfall_id, front.face_index,
-                               scale=args.scale, upscaler=upscaler)
+                               scale=args.scale, quality=args.quality,
+                               upscaler=upscaler)
         UP.check_dpi_gate(out, label=entry.name)
     print("Done.")
     return 0
@@ -373,11 +385,11 @@ def cmd_export(args: argparse.Namespace) -> int:
     upscaler: UP.UpscaleBackend | None = None
     if upscale_on:
         try:
-            upscaler = UP.select_upscaler(args.backend)
+            upscaler = UP.select_upscaler(args.backend, quality=args.quality)
         except UP.UpscalerNotAvailable as e:
             print(f"error: --upscale set but {e}", file=sys.stderr)
             return 2
-        print(f"Backend: {type(upscaler).__name__}")
+        print(f"Backend: {type(upscaler).__name__} (quality={args.quality})")
 
     render_cards: list[RenderCard] = []
     total = len(project.entries)
@@ -397,7 +409,9 @@ def cmd_export(args: argparse.Namespace) -> int:
                 cache_key = f"custom-{project.name}-{img_path.stem}"
                 print(f"[{i}/{total}] upscaling {entry.name} (custom art)")
                 img_path = UP.upscale_image(img_path, cache_key, 0,
-                                             scale=args.scale, upscaler=upscaler)
+                                             scale=args.scale,
+                                             quality=args.quality,
+                                             upscaler=upscaler)
             UP.check_dpi_gate(img_path, warn=args.dpi_warn,
                                fail=args.dpi_fail, label=entry.name)
             render_cards.append(RenderCard(image_path=img_path, name=entry.name,
@@ -411,8 +425,8 @@ def cmd_export(args: argparse.Namespace) -> int:
         front, _back = client.face_images_for(card)
         img_path = client.download_image(front)
         if upscaler is not None:
-            cached = UP.DEFAULT_CACHE_DIR / (
-                f"{front.scryfall_id}_face{front.face_index}_x{args.scale}.png")
+            cached = UP.DEFAULT_CACHE_DIR / UP.cache_key_for(
+                front.scryfall_id, front.face_index, args.scale, args.quality)
             if cached.exists() and cached.stat().st_size > 0:
                 upscale_hits += 1
             else:
@@ -421,6 +435,7 @@ def cmd_export(args: argparse.Namespace) -> int:
             img_path = UP.upscale_image(img_path, front.scryfall_id,
                                         front.face_index,
                                         scale=args.scale,
+                                        quality=args.quality,
                                         upscaler=upscaler)
         UP.check_dpi_gate(img_path, warn=args.dpi_warn, fail=args.dpi_fail,
                           label=entry.name)
@@ -544,6 +559,10 @@ def build_parser() -> argparse.ArgumentParser:
                           default="auto",
                           help="Which upscaler backend to use (default: auto — "
                                "prefer MPS on Apple Silicon, else ncnn)")
+    p_export.add_argument("--quality", choices=["quality", "fast"],
+                          default="quality",
+                          help="'quality' = x4plus (default); 'fast' = "
+                               "x4plus-anime (~4× faster, subtle detail loss)")
     p_export.add_argument("--dpi-warn", type=float, default=550.0,
                           dest="dpi_warn",
                           help="Warn threshold (spec §7 default 550)")
@@ -586,6 +605,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--backend", choices=["ncnn", "mps"], default="ncnn",
                          help="'ncnn' = prebuilt binary (universal); 'mps' = "
                               "PyTorch weights for native Apple Silicon speed")
+    p_setup.add_argument("--model", default="all",
+                         help="For --backend mps: which weights to fetch — "
+                              "'quality' (x4plus), 'fast' (x4plus-anime), "
+                              "or 'all' (default). The ncnn bundle already "
+                              "includes both.")
     p_setup.add_argument("--force", action="store_true",
                          help="Reinstall even if already present")
     p_setup.set_defaults(func=cmd_setup_upscaler)
@@ -598,6 +622,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_up.add_argument("--backend", choices=["auto", "mps", "ncnn"],
                       default="auto",
                       help="Which upscaler backend to use (default: auto)")
+    p_up.add_argument("--quality", choices=["quality", "fast"], default="quality",
+                      help="'quality' (default) or 'fast' — see `export --help`")
     p_up.set_defaults(func=cmd_upscale)
 
     return p

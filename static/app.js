@@ -153,6 +153,7 @@ function setView(v) {
   $("#btn-export").hidden = v !== "deck";
   $("#backs-picker").hidden = v !== "deck";
   $("#upscale-toggle").hidden = v !== "deck";
+  $("#quality-picker").hidden = v !== "deck";
 }
 
 // --- Projects ---------------------------------------------------------------
@@ -1206,7 +1207,8 @@ function runExport() {
 
   const backs = $("#backs-mode")?.value || "none";
   const upscale = $("#upscale-checkbox")?.checked ? "true" : "false";
-  const params = new URLSearchParams({ backs, upscale });
+  const quality = $("#quality-mode")?.value || "quality";
+  const params = new URLSearchParams({ backs, upscale, quality });
   fetch(`/api/projects/${encodeURIComponent(state.activeProject)}/export?${params}`, {
     method: "POST",
   }).then(async (resp) => {
@@ -1264,7 +1266,9 @@ function showDownload(sel, serverPath) {
 function handleExportEvent(evt, status) {
   const { event, data } = evt;
   if (event === "start") {
-    const mode = data.upscale ? " (upscaled)" : "";
+    const mode = data.upscale
+      ? ` (upscaled${data.quality && data.quality !== "quality" ? ", " + data.quality : ""})`
+      : "";
     status.textContent = `exporting ${data.total} cards${mode}…`;
   } else if (event === "progress") {
     if (data.phase === "render") status.textContent = "rendering PDF…";

@@ -462,6 +462,7 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
                     cut_lines: str = "full",
                     cut_color: str = "#4d8bff",
                     upscale: bool | None = None,
+                    quality: str = "quality",
                     backs: str = "none",
                     flip_edge: str = "long",
                     back_offset_x: float = 0.0,
@@ -472,6 +473,9 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
             raise HTTPException(400, "backs must be 'none', 'duplex' or 'separate'")
         if flip_edge not in ("long", "short"):
             raise HTTPException(400, "flip_edge must be 'long' or 'short'")
+        if quality not in UP.MODELS:
+            raise HTTPException(400,
+                f"quality must be one of {list(UP.MODELS)}")
         try:
             color = parse_hex_color(cut_color)
         except ValueError as e:
@@ -483,6 +487,7 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
         return StreamingResponse(
             _export_stream(state, project_name=project_name, spec=spec,
                            cut_color=color, upscale_on=want_upscale,
+                           quality=quality,
                            backs_mode=backs,
                            flip_edge=flip_edge,  # type: ignore[arg-type]
                            back_offset=(back_offset_x, back_offset_y)),
@@ -830,6 +835,14 @@ async def _run_with_heartbeats(fn, *args):
     Callers consume with `async for item in _run_with_heartbeats(...)`.
     """
     task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+    async for item in _run_with_heartbeats_task(task):
+        yield item
+
+
+async def _run_with_heartbeats_task(task: "asyncio.Task"):
+    """Same shape as `_run_with_heartbeats`, but takes an already-scheduled
+    task (used by the download-prefetch pipeline where the task was created
+    on a previous iteration)."""
     while not task.done():
         try:
             await asyncio.wait_for(asyncio.shield(task),
@@ -840,10 +853,17 @@ async def _run_with_heartbeats(fn, *args):
     yield ("__result__", task.result())
 
 
+def _upscale_kw(src, scryfall_id, face_index, quality):
+    """`asyncio.to_thread` only forwards positional args, so wrap the
+    upscale call so we can thread the `quality` kwarg through."""
+    return UP.upscale_image(src, scryfall_id, face_index, quality=quality)
+
+
 async def _export_stream(state: AppState, *, project_name: str,
                           spec: PageSpec,
                           cut_color: tuple[float, float, float],
                           upscale_on: bool,
+                          quality: str = "quality",
                           backs_mode: str = "none",
                           flip_edge: str = "long",
                           back_offset: tuple[float, float] = (0.0, 0.0),
@@ -854,7 +874,7 @@ async def _export_stream(state: AppState, *, project_name: str,
     upscaler: UP.UpscaleBackend | None = None
     if upscale_on:
         try:
-            upscaler = UP.select_upscaler("auto")
+            upscaler = UP.select_upscaler("auto", quality=quality)
         except UP.UpscalerNotAvailable as e:
             yield _sse("error", {"message":
                 f"Upscaling requested but no backend is installed: {e}. "
@@ -874,7 +894,35 @@ async def _export_stream(state: AppState, *, project_name: str,
     try:
         total = len(project.entries)
         yield _sse("start", {"total": total, "project": project.name,
-                             "upscale": upscale_on})
+                             "upscale": upscale_on, "quality": quality})
+
+        # --- Download pipeline setup -----------------------------------------
+        # Prefetching the next card's download while we upscale the current
+        # one gives us a free win on cold-cache exports — the Scryfall image
+        # for card N+1 arrives before we're ready to upscale it.
+        def _download_for(entry):
+            card = state.client.resolve_named(
+                entry.name, entry.selected_print.set,
+                entry.selected_print.collector_number,
+            )
+            front, _back = state.client.face_images_for(card)
+            return front, state.client.download_image(front)
+
+        pending: dict[int, "asyncio.Task"] = {}
+
+        def _prefetch_from(start_idx: int) -> None:
+            """Kick off the download for the next non-custom entry at or
+            after `start_idx`, unless one is already pending."""
+            for i in range(start_idx, total):
+                if project.entries[i].custom_image_path:
+                    continue
+                if i in pending:
+                    return
+                pending[i] = asyncio.create_task(
+                    asyncio.to_thread(_download_for, project.entries[i]))
+                return
+
+        _prefetch_from(0)
 
         render_cards: list[RenderCard] = []
         for idx, entry in enumerate(project.entries):
@@ -898,7 +946,7 @@ async def _export_stream(state: AppState, *, project_name: str,
                     cache_key = f"custom-{project_name}-{custom_path.stem}"
                     try:
                         async for item in _run_with_heartbeats(
-                            UP.upscale_image, custom_path, cache_key, 0,
+                            _upscale_kw, custom_path, cache_key, 0, quality,
                         ):
                             if isinstance(item, tuple) and item and item[0] == "__result__":
                                 image_path = item[1]
@@ -924,17 +972,17 @@ async def _export_stream(state: AppState, *, project_name: str,
             yield _sse("progress", {"index": idx, "total": total,
                                     "name": entry.name, "phase": "download"})
 
-            def _download(entry=entry):
-                card = state.client.resolve_named(
-                    entry.name, entry.selected_print.set,
-                    entry.selected_print.collector_number,
-                )
-                front, _back = state.client.face_images_for(card)
-                return front, state.client.download_image(front)
-
+            # Await the download that was kicked off earlier (either at loop
+            # start or by the previous iteration's prefetch).
+            task = pending.pop(idx, None)
+            if task is None:
+                # Custom-only earlier entries meant we hadn't started this one;
+                # do it now with a heartbeat wrapper.
+                task = asyncio.create_task(
+                    asyncio.to_thread(_download_for, entry))
             try:
                 dl_result = None
-                async for item in _run_with_heartbeats(_download):
+                async for item in _run_with_heartbeats_task(task):
                     if isinstance(item, tuple) and item and item[0] == "__result__":
                         dl_result = item[1]
                     else:
@@ -944,14 +992,18 @@ async def _export_stream(state: AppState, *, project_name: str,
                 yield _sse("error", {"index": idx, "name": entry.name, "message": str(e)})
                 return
 
+            # Kick off the NEXT non-custom download in parallel so it lands
+            # during our upscale step.
+            _prefetch_from(idx + 1)
+
             image_path = src_path
             if upscaler is not None:
                 yield _sse("progress", {"index": idx, "total": total,
                                         "name": entry.name, "phase": "upscale"})
                 try:
                     async for item in _run_with_heartbeats(
-                        UP.upscale_image, src_path, front.scryfall_id,
-                        front.face_index,
+                        _upscale_kw, src_path, front.scryfall_id,
+                        front.face_index, quality,
                     ):
                         if isinstance(item, tuple) and item and item[0] == "__result__":
                             image_path = item[1]

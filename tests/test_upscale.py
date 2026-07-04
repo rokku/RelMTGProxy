@@ -151,6 +151,25 @@ class TestNeedsUpscale:
         assert UP.needs_upscale(p, min_dpi=400.0) is False
 
 
+class TestModelCatalog:
+    def test_quality_and_fast_registered(self):
+        assert "quality" in UP.MODELS
+        assert "fast" in UP.MODELS
+
+    def test_num_block_matches_architecture(self):
+        # x4plus is 23 blocks (RRDBNet default); the anime variant is 6.
+        assert UP.MODELS["quality"].num_block == 23
+        assert UP.MODELS["fast"].num_block == 6
+
+    def test_default_cache_key_backwards_compatible(self):
+        # Existing caches keep working for the default model — no suffix.
+        assert UP.cache_key_for("abc", 0, 2) == "abc_face0_x2.png"
+
+    def test_fast_cache_key_has_quality_suffix(self):
+        # Alternative models sit alongside the defaults, don't overwrite them.
+        assert UP.cache_key_for("abc", 0, 2, "fast") == "abc_face0_x2_fast.png"
+
+
 class TestSelectUpscaler:
     def test_explicit_unknown_backend_raises(self):
         with pytest.raises(ValueError, match="Unknown backend"):

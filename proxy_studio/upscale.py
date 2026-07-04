@@ -29,10 +29,8 @@ log = logging.getLogger(__name__)
 DEFAULT_CACHE_DIR = Path("cache/images/upscaled")
 DEFAULT_VENDOR_DIR = Path("vendor/realesrgan-ncnn-vulkan")
 BINARY_NAME = "realesrgan-ncnn-vulkan"
-DEFAULT_MODEL = "realesrgan-x4plus"
 
 MPS_VENDOR_DIR = Path("vendor/mps")
-MPS_WEIGHTS_FILENAME = "RealESRGAN_x4plus.pth"
 
 # The x4plus model has a native 4× scale — the ncnn-vulkan binary supports
 # -s {2,3,4} but the spec's better-on-card-art recipe is: run at native 4×,
@@ -40,7 +38,55 @@ MPS_WEIGHTS_FILENAME = "RealESRGAN_x4plus.pth"
 NATIVE_MODEL_SCALE = 4
 DEFAULT_TARGET_SCALE = 2
 
-BackendName = str  # "auto" | "mps" | "ncnn"
+BackendName = str   # "auto" | "mps" | "ncnn"
+QualityName = str   # "quality" | "fast"
+
+DEFAULT_QUALITY: QualityName = "quality"
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """One selectable model — same architecture family, different depths."""
+    ncnn_name: str            # matches the `-n` arg on the ncnn-vulkan binary
+    mps_weights_filename: str
+    mps_weights_url: str
+    num_block: int            # RRDBNet depth (23 for x4plus, 6 for x4plus-anime)
+    description: str
+
+
+# Two options today; adding more is a matter of dropping in another entry.
+MODELS: dict[str, ModelSpec] = {
+    "quality": ModelSpec(
+        ncnn_name="realesrgan-x4plus",
+        mps_weights_filename="RealESRGAN_x4plus.pth",
+        mps_weights_url=("https://github.com/xinntao/Real-ESRGAN/releases/"
+                          "download/v0.1.0/RealESRGAN_x4plus.pth"),
+        num_block=23,
+        description="Best quality (full 23-block RRDBNet).",
+    ),
+    "fast": ModelSpec(
+        ncnn_name="realesrgan-x4plus-anime",
+        mps_weights_filename="RealESRGAN_x4plus_anime_6B.pth",
+        mps_weights_url=("https://github.com/xinntao/Real-ESRGAN/releases/"
+                          "download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth"),
+        num_block=6,
+        description="~4× faster, slight softening of fine detail (6-block RRDBNet).",
+    ),
+}
+
+# Kept for backwards compat with callers that pass a raw ncnn model name.
+DEFAULT_MODEL = MODELS["quality"].ncnn_name
+
+
+def cache_key_for(scryfall_id: str, face_index: int, scale: int,
+                   quality: QualityName = DEFAULT_QUALITY) -> str:
+    """Cache filename for an upscaled image.
+
+    The default quality keeps the legacy `_xN.png` naming so any existing
+    cache stays valid; alternative models get a `_{quality}` suffix.
+    """
+    suffix = "" if quality == DEFAULT_QUALITY else f"_{quality}"
+    return f"{scryfall_id}_face{face_index}_x{scale}{suffix}.png"
 
 
 class UpscalerNotAvailable(RuntimeError):
@@ -55,13 +101,23 @@ class UpscaleBackend(Protocol):
 # --- Ncnn-Vulkan backend ----------------------------------------------------
 @dataclass
 class NcnnVulkanUpscaler:
-    """Subprocess wrapper around the ncnn-vulkan CLI binary."""
+    """Subprocess wrapper around the ncnn-vulkan CLI binary.
+
+    `quality` (or the lower-level `model`) picks the network — "quality"
+    = `realesrgan-x4plus`, "fast" = `realesrgan-x4plus-anime`. Both ship
+    inside the v0.2.5.0 macOS bundle, so no additional download is needed.
+    """
     vendor_dir: Path = DEFAULT_VENDOR_DIR
-    model: str = DEFAULT_MODEL
+    quality: QualityName = DEFAULT_QUALITY
+    model: str | None = None      # None → derive from `quality`
     _binary_path: Path | None = None
     _models_dir: Path | None = None
 
     def __post_init__(self) -> None:
+        if self.model is None:
+            if self.quality not in MODELS:
+                raise ValueError(f"Unknown quality {self.quality!r}")
+            self.model = MODELS[self.quality].ncnn_name
         self.vendor_dir = Path(self.vendor_dir)
         self._binary_path = self._resolve_binary()
         self._models_dir = self._resolve_models_dir()
@@ -160,27 +216,36 @@ def _read_icc(path: Path) -> bytes | None:
 class MpsUpscaler:
     """Native Apple Silicon backend via PyTorch + MPS.
 
-    Loads the `RealESRGAN_x4plus.pth` weights into an inlined RRDBNet and
-    runs inference on the Mac GPU. Faster than the Rosetta-emulated
-    ncnn-vulkan binary — typically 2–3× on M-series chips.
+    Loads a Real-ESRGAN `.pth` file into an inlined RRDBNet and runs
+    inference on the Mac GPU. Two model choices via `quality`:
+      - "quality" (default) → RealESRGAN_x4plus.pth, 23 blocks, ~22 s/card.
+      - "fast" → RealESRGAN_x4plus_anime_6B.pth, 6 blocks, ~5 s/card.
     """
-    weights_path: Path = MPS_VENDOR_DIR / MPS_WEIGHTS_FILENAME
-    device: str = "auto"      # "auto" resolves to mps > cuda > cpu
-    # Half precision (fp16) roughly doubles throughput on MPS and cuts
-    # activation memory in half — with no visible impact on card art
-    # (the compression down to 1490×2080 hides any residual noise).
+    quality: QualityName = DEFAULT_QUALITY
+    weights_path: Path | None = None    # None → derive from `quality`
+    device: str = "auto"                # "auto" → mps > cuda > cpu
+    # fp16 roughly doubles throughput on MPS and cuts activation memory
+    # in half. Card art at print resolution shows no visible degradation.
     half_precision: bool = True
     _model: object | None = None
     _torch: object | None = None
     _resolved_device: str = ""
     _model_dtype: object | None = None
+    _model_spec: ModelSpec | None = None
 
     def __post_init__(self) -> None:
+        if self.quality not in MODELS:
+            raise ValueError(f"Unknown quality {self.quality!r}; "
+                              f"expected one of {list(MODELS)}")
+        self._model_spec = MODELS[self.quality]
+        if self.weights_path is None:
+            self.weights_path = MPS_VENDOR_DIR / self._model_spec.mps_weights_filename
         self.weights_path = Path(self.weights_path)
         if not self.weights_path.exists():
             raise UpscalerNotAvailable(
                 f"MPS weights not found at {self.weights_path}. "
-                "Run `python cli.py setup-upscaler --backend mps`."
+                f"Run `python cli.py setup-upscaler --backend mps` "
+                f"(or `--model {self.quality}` to fetch just this one)."
             )
         try:
             import torch  # noqa: F401
@@ -206,8 +271,11 @@ class MpsUpscaler:
     def _load_model(self):
         from .rrdbnet import RRDBNet
         torch = self._torch
+        # num_block depends on which model file we're loading — the anime
+        # variant is 6 blocks vs the full x4plus's 23.
         model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64,
-                        num_block=23, num_grow_ch=32, scale=4)
+                        num_block=self._model_spec.num_block,
+                        num_grow_ch=32, scale=4)
         state = torch.load(self.weights_path, map_location="cpu",
                            weights_only=True)
         if isinstance(state, dict):
@@ -224,12 +292,13 @@ class MpsUpscaler:
         model = model.to(self._resolved_device).to(self._model_dtype)
         return model
 
-    # Tile size for chunked inference on MPS. 256 with 16 px overlap runs
-    # reliably on M-series GPUs (larger tiles occasionally stall the MPS
-    # command buffer on macOS 26 for reasons we don't fully understand).
-    # The overlap hides tile-boundary artefacts in the stitched output.
-    tile_size: int = 256
+    # Starting tile size. 384 with 16-px overlap runs comfortably on the
+    # M-series unified-memory budget for fp16 inference; if MPS chokes on
+    # a given tile we automatically fall back to 256 for the rest of the
+    # session (the smaller size is what we know is universally safe).
+    tile_size: int = 384
     tile_pad: int = 16
+    _min_tile_size: int = 256
 
     def upscale(self, src: Path, out: Path, *,
                 scale: int = DEFAULT_TARGET_SCALE) -> Path:
@@ -271,23 +340,43 @@ class MpsUpscaler:
 
 
     def _tile_infer(self, img: object) -> object:
-        """Split the input into overlapping tiles, run each, stitch on CPU.
+        """Tile → run → stitch, with an OOM fallback to a smaller tile size.
 
-        The RRDBNet native scale is 4×. Each padded tile runs on device,
-        the tile-proper region is cropped out (dropping the 4P overlap on
-        each side that exists to hide seams), and copied back to a CPU-side
-        accumulator. Keeping the accumulator on CPU means only one tile's
-        worth of activation memory ever lives on the GPU at a time.
+        MPS sometimes throws `RuntimeError: MPS backend out of memory` on
+        larger tiles; when that happens we halve the tile budget and retry
+        the whole image. The fallback sticks for the rest of the session so
+        we don't rediscover the ceiling on every card.
         """
+        while True:
+            try:
+                return self._tile_infer_at(img, self.tile_size)
+            except RuntimeError as e:
+                msg = str(e).lower()
+                is_oom = "out of memory" in msg or "mps" in msg and "memory" in msg
+                if not is_oom or self.tile_size <= self._min_tile_size:
+                    raise
+                new_tile = max(self._min_tile_size, self.tile_size - 128)
+                log.warning(
+                    "MPS upscaler hit an OOM at tile=%d; retrying at tile=%d "
+                    "for the rest of the session.", self.tile_size, new_tile,
+                )
+                self.tile_size = new_tile
+                # Free whatever the failed run left resident before retrying.
+                if hasattr(self._torch, "mps") and hasattr(self._torch.mps, "empty_cache"):
+                    try:
+                        self._torch.mps.empty_cache()
+                    except Exception:
+                        pass
+
+    def _tile_infer_at(self, img: object, tile: int) -> object:
         torch = self._torch
         device = self._resolved_device
         _, c, h, w = img.shape
-        tile = self.tile_size
         pad = self.tile_pad
         scale = NATIVE_MODEL_SCALE
 
-        # Preallocated CPU-side accumulator — no host↔device sync per tile
-        # to update it (the sync happens only on the copy itself).
+        # CPU-side accumulator — only one tile's worth of activation memory
+        # ever lives on the GPU at a time.
         out = torch.empty((1, c, h * scale, w * scale), dtype=img.dtype)
 
         for y in range(0, h, tile):
@@ -307,16 +396,18 @@ class MpsUpscaler:
                 bottom = top + (y1 - y0) * scale
                 right  = left + (x1 - x0) * scale
 
-                # Cast back to float32 on the CPU accumulator so numpy sees
-                # the full-precision output when we finally convert.
                 out[:, :, y0*scale:y1*scale, x0*scale:x1*scale] = (
-                    sr[:, :, top:bottom, left:right].to("cpu", dtype=self._torch.float32)
+                    sr[:, :, top:bottom, left:right]
+                        .to("cpu", dtype=self._torch.float32)
                 )
         return out
 
 
-def mps_weights_installed(vendor_dir: Path = MPS_VENDOR_DIR) -> bool:
-    return (Path(vendor_dir) / MPS_WEIGHTS_FILENAME).exists()
+def mps_weights_installed(vendor_dir: Path = MPS_VENDOR_DIR,
+                           *, quality: QualityName = DEFAULT_QUALITY) -> bool:
+    filename = MODELS[quality].mps_weights_filename if quality in MODELS \
+                else MODELS[DEFAULT_QUALITY].mps_weights_filename
+    return (Path(vendor_dir) / filename).exists()
 
 
 def torch_mps_available() -> bool:
@@ -334,22 +425,24 @@ def torch_mps_available() -> bool:
 # --- High-level facade ------------------------------------------------------
 def upscale_image(src: Path, scryfall_id: str, face_index: int, *,
                   scale: int = DEFAULT_TARGET_SCALE,
+                  quality: QualityName = DEFAULT_QUALITY,
                   cache_dir: Path = DEFAULT_CACHE_DIR,
                   upscaler: UpscaleBackend | None = None) -> Path:
     """Return the cached upscaled image path, creating it if missing.
 
     Idempotent: an existing non-empty output at the cache path is returned
-    without re-running the backend. Callers can inject `upscaler` to swap
-    the backend (used by tests and by any future MPS/PyTorch implementation).
+    without re-running the backend. `quality` is included in the cache key
+    so alternate models don't stomp each other's outputs. Callers can
+    inject `upscaler` to swap the backend (used by tests + backend choice).
     """
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    out = cache_dir / f"{scryfall_id}_face{face_index}_x{scale}.png"
+    out = cache_dir / cache_key_for(scryfall_id, face_index, scale, quality)
     if out.exists() and out.stat().st_size > 0:
         return out
 
     if upscaler is None:
-        upscaler = NcnnVulkanUpscaler()
+        upscaler = select_upscaler("auto", quality=quality)
 
     tmp = out.with_suffix(out.suffix + ".tmp")
     upscaler.upscale(Path(src), tmp, scale=scale)
@@ -419,8 +512,9 @@ def any_backend_installed() -> bool:
     return is_binary_installed() or mps_weights_installed()
 
 
-def select_upscaler(backend: BackendName = "auto") -> UpscaleBackend:
-    """Instantiate the best available upscaler.
+def select_upscaler(backend: BackendName = "auto",
+                     *, quality: QualityName = DEFAULT_QUALITY) -> UpscaleBackend:
+    """Instantiate the best available upscaler for the requested quality.
 
     Priority when `backend == "auto"`:
       1. MPS (fastest on Apple Silicon — native, no Rosetta)
@@ -429,23 +523,23 @@ def select_upscaler(backend: BackendName = "auto") -> UpscaleBackend:
     Explicit `mps` / `ncnn` forces that backend or raises if unavailable.
     """
     if backend == "mps":
-        return MpsUpscaler()
+        return MpsUpscaler(quality=quality)
     if backend == "ncnn":
-        return NcnnVulkanUpscaler()
+        return NcnnVulkanUpscaler(quality=quality)
     if backend != "auto":
         raise ValueError(f"Unknown backend {backend!r} (expected auto|mps|ncnn)")
 
-    # auto
-    if torch_mps_available() and mps_weights_installed():
+    # auto — prefer MPS if the specific weights for `quality` are on disk.
+    if torch_mps_available() and mps_weights_installed(quality=quality):
         try:
-            up = MpsUpscaler()
-            log.info("Using MPS upscaler backend (native Apple Silicon).")
+            up = MpsUpscaler(quality=quality)
+            log.info("Using MPS upscaler backend (quality=%s).", quality)
             return up
         except UpscalerNotAvailable as e:
             log.warning("MPS backend unavailable, falling back: %s", e)
     if is_binary_installed():
-        log.info("Using ncnn-vulkan upscaler backend.")
-        return NcnnVulkanUpscaler()
+        log.info("Using ncnn-vulkan upscaler backend (quality=%s).", quality)
+        return NcnnVulkanUpscaler(quality=quality)
     raise UpscalerNotAvailable(
         "No upscaler backend installed. Run `python cli.py setup-upscaler` "
         "(ncnn) or `python cli.py setup-upscaler --backend mps` (PyTorch/MPS)."
