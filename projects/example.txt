@@ -1,0 +1,9 @@
+// Sample deck for smoke-testing the parser — not exported to git.
+1 Mazirek, Kraul Death Priest
+1x Sol Ring
+4 Llanowar Elves (M19) 314
+1 Fabled Passage [ELD] 244
+2 Swamp <foil>
+
+SIDEBOARD:
+1 Duress

@@ -204,7 +204,7 @@ async function openProject(name) {
   }
   $("#project-badge").hidden = false;
   $("#project-badge").textContent = name;
-  document.title = `${name} — MTG Proxy Studio`;
+  document.title = `${name} — RelMTG Proxy Studio`;
   setView("deck");
   renderProjectList();
 
