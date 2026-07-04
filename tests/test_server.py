@@ -268,6 +268,66 @@ class TestGetProject:
         assert client.get("/api/projects/nope").status_code == 404
 
 
+class TestScryfallSelectOnCustomEntry:
+    """When a custom-art entry has its art swapped to a Scryfall printing,
+    `custom_image_path` must be cleared and `oracle_id` filled in — otherwise
+    the choice silently reverts on the next open of the project."""
+
+    def test_select_clears_custom_image_path(self, client, tmp_path):
+        # Hand-craft an entry that started as a library-only card.
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir(exist_ok=True)
+        Project(
+            name="swap",
+            entries=[Entry(
+                quantity=1, name="Sol Ring", oracle_id=ORACLE,
+                selected_print=SelectedPrint(scryfall_id="", set="",
+                                              collector_number=""),
+                layout="normal", back="standard",
+                custom_image_path="cache/images/custom/_library/prev.png",
+            )],
+        ).save(projects_dir)
+
+        r = client.post("/api/projects/swap/select", json={
+            "entry_index": 0, "scryfall_id": SR_ID,
+        })
+        assert r.status_code == 200
+        assert r.json()["entry"]["custom_image_path"] in (None, "")
+
+        # And the cleared value survives the round-trip to disk — this is
+        # what the "art reverts on reopen" bug was violating.
+        reloaded = Project.load("swap", projects_dir)
+        assert reloaded.entries[0].custom_image_path in (None, "")
+        assert reloaded.entries[0].selected_print.scryfall_id == SR_ID
+
+    def test_select_backfills_missing_oracle_id(self, client, tmp_path):
+        # A custom-art entry may have no oracle_id yet; picking a Scryfall
+        # printing should populate it so the Printings tab keeps working
+        # on subsequent modal opens.
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir(exist_ok=True)
+        Project(
+            name="no-oracle",
+            entries=[Entry(
+                quantity=1, name="Sol Ring", oracle_id="",
+                selected_print=SelectedPrint(scryfall_id="", set="",
+                                              collector_number=""),
+                layout="normal", back="standard",
+                custom_image_path="cache/images/custom/_library/x.png",
+            )],
+        ).save(projects_dir)
+
+        # The endpoint needs to resolve scryfall_id via a direct card
+        # lookup because there's no oracle_id to key the printings cache.
+        r = client.post("/api/projects/no-oracle/select", json={
+            "entry_index": 0, "scryfall_id": SR_ID,
+        })
+        assert r.status_code == 200
+        reloaded = Project.load("no-oracle", projects_dir)
+        assert reloaded.entries[0].oracle_id == ORACLE
+        assert reloaded.entries[0].custom_image_path in (None, "")
+
+
 class TestEntryCrud:
     def test_thumb_returns_url(self, seeded_client):
         r = seeded_client.get("/api/projects/unit/entries/0/thumb")

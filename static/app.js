@@ -773,6 +773,11 @@ async function selectPrinting(scryfallId) {
     entry.selected_print = res.entry.selected_print;
     entry.layout = res.entry.layout;
     entry.back = res.entry.back;
+    // Server now clears custom_image_path when a Scryfall printing is
+    // picked — reflect that locally too so the deck-grid tile drops its
+    // "custom" badge without a refetch.
+    entry.custom_image_path = res.entry.custom_image_path ?? null;
+    entry.oracle_id = res.entry.oracle_id || entry.oracle_id;
     state.entryThumbs.set(state.activeIndex, { thumb_url: res.entry.thumb_url });
     renderDeckGrid();
     renderPrintings();

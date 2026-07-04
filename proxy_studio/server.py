@@ -428,6 +428,16 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
         )
         entry.layout = card.get("layout", entry.layout)
         entry.back = "face" if card.get("layout") in SF.DFC_LAYOUTS else "standard"
+        # Picking a Scryfall printing is a clear "use this art" signal —
+        # drop any prior custom-image override so the choice takes effect
+        # (previously the entry kept both fields and every consumer
+        # short-circuited on the custom path).
+        entry.custom_image_path = None
+        # If the entry started life as a custom-art upload, it had no
+        # oracle_id — capture the Scryfall one now so the Library <->
+        # Printings tabs stay consistent on the next open.
+        if not entry.oracle_id:
+            entry.oracle_id = card.get("oracle_id", "")
         project.save(state.projects_dir)
         return {"ok": True, "entry": _entry_view(entry, state, card=card)}
 
