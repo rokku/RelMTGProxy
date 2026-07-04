@@ -1,0 +1,11 @@
+# Verified against PyPI on 2026-07-03.
+requests==2.34.2
+reportlab==5.0.0
+Pillow==12.3.0
+fastapi==0.139.0
+uvicorn[standard]==0.49.0
+python-multipart==0.0.32  # multipart file uploads for the picker UI
+
+# Dev
+pytest==8.3.3
+httpx==0.27.2   # required by fastapi.testclient

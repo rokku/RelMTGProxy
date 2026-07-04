@@ -1,0 +1,8 @@
+# Optional deps for the MPS/PyTorch upscaler backend (native Apple Silicon).
+# Install with: pip install -r requirements-mps.txt
+# Then: python cli.py setup-upscaler --backend mps
+#
+# Verified against PyPI on 2026-07-04. PyTorch 2.12.x has native arm64
+# wheels with MPS support baked in.
+torch>=2.12,<3.0
+numpy>=2.0

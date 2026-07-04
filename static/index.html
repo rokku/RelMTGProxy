@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MTG Proxy Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="mana-stripe" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <a href="#" id="brand-link" class="brand-link" aria-label="RelMTG Proxy home">
+        <img class="brand-logo" src="/assets/relmtgproxy_logo.png"
+             alt="RelMTG Proxy — Colorful Magic Proxy Generator">
+      </a>
+      <span id="project-badge" class="project-badge" hidden></span>
+    </div>
+    <div class="actions">
+      <label id="upscale-toggle" class="chip" hidden title="Upscale every card to ~600 DPI before export">
+        <input type="checkbox" id="upscale-checkbox" checked>
+        <span>600 DPI upscale</span>
+      </label>
+      <label id="backs-picker" class="chip" hidden>
+        <span>Backs</span>
+        <select id="backs-mode">
+          <option value="none">None</option>
+          <option value="duplex">Duplex (interleaved)</option>
+          <option value="separate">Separate file</option>
+        </select>
+      </label>
+      <button id="btn-export" class="primary" hidden>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12"/><path d="m6 9 6-6 6 6"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>
+        </svg>
+        Export PDF
+      </button>
+      <a id="download-fronts" class="download-btn" href="" download hidden>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 15V3"/><path d="m6 9 6 6 6-6"/><path d="M4 21h16"/>
+        </svg>
+        <span class="dl-name"></span>
+      </a>
+      <a id="download-backs" class="download-btn" href="" download hidden>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 15V3"/><path d="m6 9 6 6 6-6"/><path d="M4 21h16"/>
+        </svg>
+        <span class="dl-name"></span>
+      </a>
+      <span id="export-status" class="status"></span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside id="projects-rail" class="projects-rail">
+      <div class="rail-header rail-header-row">
+        <h2>Projects</h2>
+        <button id="btn-new-project" class="ghost icon-button" type="button" title="New project">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          New
+        </button>
+      </div>
+      <ul id="project-list" class="project-list"></ul>
+    </aside>
+
+    <section id="picker" class="picker">
+      <!-- Landing hero -->
+      <div id="landing" class="landing">
+        <div class="hero">
+          <img class="hero-logo" src="/assets/relmtgproxy_logo.png"
+               alt="RelMTG Proxy — Colorful Magic Proxy Generator">
+          <h2 class="hero-title">Turn deck lists into print-ready proxies.</h2>
+          <p class="hero-sub">
+            Fetch cards from Scryfall, pick the perfect art, upscale to 600 DPI,
+            and export A4 PDFs with cut guides — all local, no accounts.
+          </p>
+          <div class="hero-actions">
+            <button id="btn-hero-new" class="primary large" type="button">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+              Start a new project
+            </button>
+          </div>
+          <div class="hero-shortcuts">
+            Drag cards to reorder ·
+            <kbd>Click</kbd> a card to swap its art ·
+            drop images anywhere to add
+          </div>
+        </div>
+      </div>
+
+      <!-- New-project form -->
+      <div id="new-project" class="new-project" hidden>
+        <div class="new-project-card">
+          <h2>New project</h2>
+          <p class="dim">Paste a deck list (Moxfield / Archidekt / MTGO plain-text) — or paste a Moxfield deck URL and we'll fetch it for you.</p>
+          <label>
+            <span>Project name</span>
+            <input id="np-name" type="text" placeholder="my-deck" autocomplete="off">
+          </label>
+          <label>
+            <span>Deck list or Moxfield URL</span>
+            <textarea id="np-decklist" rows="12" spellcheck="false"
+              placeholder="https://www.moxfield.com/decks/YOUR-DECK-ID&#10;&#10;— or paste cards directly —&#10;&#10;1 Mazirek, Kraul Death Priest&#10;1x Sol Ring&#10;4 Llanowar Elves (M19) 314&#10;1 Fabled Passage [ELD] 244&#10;2 Swamp"></textarea>
+          </label>
+          <div class="or-divider"><span>or</span></div>
+          <div>
+            <label class="dropzone" id="np-dropzone">
+              <input id="np-file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>
+              </svg>
+              <div>
+                <div class="dz-title">Drop card art here</div>
+                <div class="dz-sub">or click to pick files — PNG / JPG / WebP</div>
+              </div>
+            </label>
+            <ul id="np-file-list" class="np-file-list"></ul>
+          </div>
+          <div class="new-project-actions">
+            <button id="btn-create" class="primary" type="button">
+              Create project
+            </button>
+            <button id="btn-cancel-new" type="button" class="ghost">Cancel</button>
+            <span id="new-project-status" class="status"></span>
+          </div>
+          <ul id="new-project-failures" class="failures" hidden></ul>
+        </div>
+      </div>
+
+      <!-- Deck view: grid of card tiles -->
+      <div id="deck-view" class="deck-view" hidden>
+        <div class="deck-toolbar">
+          <div class="search-input deck-search">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="filter-entries" placeholder="Filter cards…" type="search">
+          </div>
+          <span id="deck-count" class="deck-count"></span>
+          <label class="zoom-control" title="Number of columns in the deck grid">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="6" height="18" rx="1"/>
+              <rect x="15" y="3" width="6" height="18" rx="1"/>
+            </svg>
+            <input id="zoom-slider" type="range" min="2" max="6" step="1" value="3" aria-label="Columns">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="4" height="18" rx="1"/>
+              <rect x="10" y="3" width="4" height="18" rx="1"/>
+              <rect x="17" y="3" width="4" height="18" rx="1"/>
+              <rect x="24" y="3" width="4" height="18" rx="1" transform="translate(-2 0)"/>
+            </svg>
+            <span id="zoom-label" class="zoom-label" aria-live="polite">3</span>
+          </label>
+          <div class="add-art-wrap">
+            <button id="btn-add-cards" class="ghost icon-button" type="button" aria-haspopup="menu" aria-expanded="false" title="Add cards">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+              Add art
+              <svg class="dropdown-arrow" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div id="add-art-menu" class="popover-menu" role="menu" hidden>
+              <button class="popover-item" id="menu-upload-new" type="button" role="menuitem">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
+                <div>
+                  <div class="pi-title">Upload new files</div>
+                  <div class="pi-sub">Adds to the library and to this deck</div>
+                </div>
+              </button>
+              <button class="popover-item" id="menu-open-library" type="button" role="menuitem">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                <div>
+                  <div class="pi-title">Choose from library</div>
+                  <div class="pi-sub">Browse previously-uploaded art</div>
+                </div>
+              </button>
+            </div>
+          </div>
+          <input id="entries-file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+          <input id="library-file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+        </div>
+        <div id="deck-scroll" class="deck-scroll">
+          <div id="deck-grid" class="deck-grid"></div>
+          <div id="deck-empty" class="deck-empty" hidden>
+            <p>This deck is empty.</p>
+            <p class="dim">Click <strong>Add art</strong> or drop card images anywhere on the grid.</p>
+          </div>
+        </div>
+        <div id="deck-drop-hint" class="drop-hint" hidden>Drop images to add</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Printings picker (modal) -->
+  <dialog id="picker-modal" class="picker-modal">
+    <div class="picker-modal-header">
+      <div class="picker-title-block">
+        <h2 id="picker-title">Select a card</h2>
+        <p id="picker-subtitle" class="dim"></p>
+      </div>
+      <div class="picker-tabs" role="tablist">
+        <button class="picker-tab active" id="picker-tab-printings" data-tab="printings" role="tab" type="button">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          Printings
+        </button>
+        <button class="picker-tab" id="picker-tab-library" data-tab="library" role="tab" type="button">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v6H4z"/><path d="M4 14h16v6H4z"/></svg>
+          Library
+        </button>
+      </div>
+      <div class="filters" id="picker-filters">
+        <label class="chip"><input type="checkbox" id="filter-digital" checked> Hide digital</label>
+        <label class="chip"><input type="checkbox" id="filter-english" checked> English only</label>
+        <label class="chip">
+          <span>Frame</span>
+          <select id="filter-frame">
+            <option value="all">All</option>
+            <option value="2015">Modern (2015)</option>
+            <option value="2003">Modern (2003)</option>
+            <option value="1997">Old (pre-2003)</option>
+            <option value="showcase">Showcase</option>
+            <option value="borderless">Borderless</option>
+            <option value="extended">Extended</option>
+          </select>
+        </label>
+      </div>
+      <button id="picker-close" class="ghost icon-button" type="button" title="Close (Esc)">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <!-- Printings tab -->
+    <div id="printings-scroll" class="printings-scroll" role="tabpanel">
+      <div id="printings" class="printings-grid"></div>
+      <div id="load-more-bar" class="load-more-bar" hidden>
+        <button id="btn-load-more" class="ghost" type="button">
+          Load more
+          <span id="load-more-remaining" class="remaining"></span>
+        </button>
+      </div>
+    </div>
+    <!-- Library tab -->
+    <div id="picker-library-scroll" class="library-scroll" role="tabpanel" hidden>
+      <div class="library-tab-toolbar">
+        <label class="chip">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="picker-library-filter" type="search" placeholder="Filter library…" style="background:transparent;border:0;color:inherit;outline:none;width:160px;font:inherit">
+        </label>
+        <span class="dim" style="font-size:12px">Click any asset to swap this card's art.</span>
+      </div>
+      <div id="picker-library-grid" class="library-grid"></div>
+      <div id="picker-library-empty" class="deck-empty" hidden>
+        <p>Your library is empty.</p>
+        <p class="dim">Close this and use <strong>Add art → Upload new files</strong> to seed it.</p>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Art library (modal) -->
+  <dialog id="library-modal" class="picker-modal library-modal">
+    <div class="picker-modal-header">
+      <div>
+        <h2>Art library</h2>
+        <p class="dim" id="library-subtitle">Click assets to select; use them in this deck or remove from the library.</p>
+      </div>
+      <div class="filters">
+        <label class="chip" style="min-width:200px">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="library-filter" type="search" placeholder="Filter…" style="background:transparent;border:0;color:inherit;outline:none;width:100%;font:inherit">
+        </label>
+      </div>
+      <button id="library-close" class="ghost icon-button" type="button" title="Close (Esc)">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="library-scroll">
+      <div id="library-grid" class="library-grid"></div>
+      <div id="library-empty" class="deck-empty" hidden>
+        <p>Your library is empty.</p>
+        <p class="dim">Upload some art first — it'll be reusable across every project.</p>
+      </div>
+    </div>
+    <div class="library-footer">
+      <span id="library-selection-count" class="dim">Select assets to add.</span>
+      <div class="lib-actions">
+        <button id="library-upload-more" class="ghost" type="button">Upload more…</button>
+        <button id="library-add-selected" class="primary" type="button" disabled>Add to deck</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <dialog id="confirm-dialog" class="confirm-dialog">
+    <p id="confirm-message"></p>
+    <div class="confirm-actions">
+      <button id="confirm-no" type="button" class="ghost">Cancel</button>
+      <button id="confirm-yes" type="button" class="danger">Delete</button>
+    </div>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
