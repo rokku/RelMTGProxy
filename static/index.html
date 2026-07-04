@@ -301,6 +301,32 @@
     </div>
   </dialog>
 
+  <!-- Project-creation progress overlay -->
+  <dialog id="progress-modal" class="progress-modal">
+    <div class="progress-inner">
+      <div class="progress-spinner" aria-hidden="true">
+        <svg viewBox="0 0 50 50" width="44" height="44">
+          <circle cx="25" cy="25" r="20" fill="none" stroke="url(#spinGrad)" stroke-width="4" stroke-linecap="round" stroke-dasharray="80 40"/>
+          <defs>
+            <linearGradient id="spinGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#a78bfa"/>
+              <stop offset="1" stop-color="#22d3ee"/>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <h2 id="progress-title">Creating your deck</h2>
+      <p id="progress-sub" class="dim">Getting things ready…</p>
+      <div class="progress-bar-track" aria-hidden="true">
+        <div id="progress-bar" class="progress-bar-fill" style="width:0"></div>
+      </div>
+      <div class="progress-detail">
+        <span id="progress-counter" class="progress-counter">0 / 0</span>
+        <span id="progress-current" class="progress-current"></span>
+      </div>
+    </div>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <dialog id="confirm-dialog" class="confirm-dialog">

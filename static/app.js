@@ -312,39 +312,43 @@ async function createProject() {
   const btn = $("#btn-create");
   btn.disabled = true;
   status.className = "status";
-  const looksLikeUrl = /^\s*(?:https?:\/\/)?(?:www\.)?moxfield\.com\//i.test(decklist);
-  if (looksLikeUrl) status.textContent = "fetching from Moxfield & resolving cards…";
-  else if (decklist.trim()) status.textContent = "resolving cards on Scryfall…";
-  else status.textContent = "creating…";
+  status.textContent = "";
 
-  let body;
+  const looksLikeUrl = /^\s*(?:https?:\/\/)?(?:www\.)?moxfield\.com\//i.test(decklist);
+  openProgressModal({
+    title: "Creating your deck",
+    sub: looksLikeUrl
+      ? "Contacting Moxfield…"
+      : (decklist.trim() ? "Resolving cards on Scryfall…" : "Setting up…"),
+  });
+
+  let result;
   try {
-    body = await api("/api/projects", {
-      method: "POST",
-      body: JSON.stringify({ name, decklist }),
-    });
+    result = await streamCreateProject({ name, decklist });
   } catch (e) {
-    status.className = "status err";
-    status.textContent = "";
-    if (e.body?.detail?.failures) {
+    closeProgressModal();
+    btn.disabled = false;
+    if (e.failures) {
+      // Decklist parse errors have line-by-line context.
       failuresUl.hidden = false;
-      for (const [lineno, text] of e.body.detail.failures) {
+      for (const [lineno, text] of e.failures) {
         failuresUl.append(el("li", {},
           el("strong", {}, `line ${lineno}: `), text));
       }
     } else {
+      status.className = "status err";
       status.textContent = `error: ${e.message}`;
     }
-    btn.disabled = false;
     return;
   }
 
   // Second phase: upload any queued art into the new project.
   if (files.length) {
-    status.textContent = `uploading ${files.length} image(s)…`;
+    setProgressSub(`Uploading ${files.length} image${files.length === 1 ? "" : "s"}…`);
     try {
-      await uploadFiles(body.name, files);
+      await uploadFiles(result.name, files);
     } catch (e) {
+      closeProgressModal();
       status.className = "status err";
       status.textContent = `upload failed: ${e.message}`;
       btn.disabled = false;
@@ -352,16 +356,108 @@ async function createProject() {
     }
   }
 
+  closeProgressModal();
   btn.disabled = false;
   await refreshProjects();
-  await openProject(body.name);
+  await openProject(result.name);
 
-  if (body.failures?.length) {
-    for (const f of body.failures) toast(`Skipped ${f.name}: ${f.message}`, "err");
+  if (result.failures?.length) {
+    for (const f of result.failures) toast(`Skipped ${f.name}: ${f.message}`, "err");
   } else {
-    const total = (body.entries || 0) + files.length;
-    toast(`Created "${body.name}" with ${total} cards`, "ok");
+    const total = (result.entries || 0) + files.length;
+    toast(`Created "${result.name}" with ${total} cards`, "ok");
   }
+}
+
+// --- Streaming project creation --------------------------------------------
+// Consumes the SSE stream from POST /api/projects/stream and updates the
+// progress overlay for each event. Resolves with the final `done` payload,
+// or rejects with an Error carrying `failures` when the server reports a
+// decklist parse error.
+async function streamCreateProject(payload) {
+  const resp = await fetch("/api/projects/stream", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok || !resp.body) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(text || `${resp.status} ${resp.statusText}`);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let done = null;
+  let error = null;
+
+  while (true) {
+    const { value, done: streamDone } = await reader.read();
+    if (streamDone) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) !== -1) {
+      const raw = buf.slice(0, idx); buf = buf.slice(idx + 2);
+      const evt = parseSSE(raw);
+      if (!evt) continue;
+      if (evt.event === "start") {
+        setProgressTotal(evt.data.total);
+      } else if (evt.event === "phase") {
+        if (evt.data.phase === "moxfield-fetch") {
+          setProgressSub("Fetching deck from Moxfield…");
+        } else if (evt.data.phase === "resolving") {
+          setProgressSub("Resolving cards on Scryfall…");
+        }
+      } else if (evt.event === "progress") {
+        setProgressStep(evt.data.index, evt.data.total, evt.data.name);
+      } else if (evt.event === "done") {
+        done = evt.data;
+      } else if (evt.event === "error") {
+        error = evt.data;
+      }
+    }
+  }
+
+  if (error) {
+    const e = new Error(error.message || "Project creation failed");
+    if (error.failures) e.failures = error.failures;
+    throw e;
+  }
+  if (!done) throw new Error("Server closed the stream without a result");
+  return done;
+}
+
+// --- Progress modal --------------------------------------------------------
+function openProgressModal({ title, sub }) {
+  const dlg = $("#progress-modal");
+  $("#progress-title").textContent = title || "Working…";
+  setProgressSub(sub || "");
+  setProgressStep(0, 0, "");
+  $("#progress-bar").style.width = "0%";
+  if (!dlg.open) dlg.showModal();
+}
+function closeProgressModal() {
+  const dlg = $("#progress-modal");
+  if (dlg.open) dlg.close();
+}
+function setProgressSub(text) {
+  $("#progress-sub").textContent = text || "";
+}
+function setProgressTotal(total) {
+  $("#progress-counter").textContent = `0 / ${total}`;
+  $("#progress-bar").style.width = total === 0 ? "100%" : "0%";
+}
+function setProgressStep(index, total, name) {
+  if (total && total > 0) {
+    // Index is 0-based; show 1-based counter, and use (index + 1) / total
+    // so the bar is at 100% only on the final card.
+    const shown = Math.min(index + 1, total);
+    $("#progress-counter").textContent = `${shown} / ${total}`;
+    $("#progress-bar").style.width = `${(shown / total) * 100}%`;
+  } else {
+    $("#progress-counter").textContent = `${index}`;
+  }
+  $("#progress-current").textContent = name || "";
 }
 
 async function uploadFiles(projectName, files) {

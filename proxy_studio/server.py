@@ -162,64 +162,39 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
 
     @app.post("/api/projects", status_code=201)
     def create_project(req: CreateProjectRequest) -> dict[str, Any]:
+        """Synchronous project creation — used by the CLI and by tests.
+
+        Resolves everything up front and returns the finished project. The
+        web UI uses the SSE-streaming variant below for per-card progress.
+        """
         state: AppState = app.state.picker
-
-        # Three ways to seed a project:
-        #   1. Moxfield URL / bare deck ID
-        #   2. Plain-text decklist
-        #   3. Neither — start empty, add cards via uploads or `add`
-        decklist_stripped = (req.decklist or "").strip()
-        entries: list[DL.DeckEntry] = []
-        if MX.looks_like_moxfield(decklist_stripped):
-            try:
-                mox_name, entries = MX.fetch_deck(decklist_stripped)
-            except MX.MoxfieldError as e:
-                raise HTTPException(400, f"Moxfield import failed: {e}")
-            raw_name = (req.name or "").strip() or MX.sanitize_project_name(mox_name)
-        elif decklist_stripped:
-            try:
-                entries = DL.parse_text(decklist_stripped)
-            except DL.DecklistError as e:
-                raise HTTPException(400, {"error": "decklist parse failed",
-                                           "failures": e.failures})
-            raw_name = req.name
-        else:
-            raw_name = req.name
-
-        name = _validate_name(raw_name)
-        target = state.projects_dir / f"{name}.json"
-        if target.exists():
-            raise HTTPException(409, f"Project {name!r} already exists")
-
+        entries, name = _prepare_new_project(state, req)
         project = Project(name=name)
         failures: list[dict[str, str]] = []
         for de in entries:
-            try:
-                card = state.client.resolve_named(
-                    de.name, de.set_code, de.collector_number)
-                project.add_entry(Entry(
-                    quantity=de.quantity,
-                    name=card.get("name", de.name),
-                    oracle_id=card.get("oracle_id", ""),
-                    selected_print=SelectedPrint(
-                        scryfall_id=card["id"],
-                        set=card.get("set", ""),
-                        collector_number=card.get("collector_number", ""),
-                    ),
-                    layout=card.get("layout", "normal"),
-                    back="face" if card.get("layout") in SF.DFC_LAYOUTS else "standard",
-                ))
-            except SF.NotFoundError as e:
-                failures.append({"name": de.name, "message": str(e)})
-            except SF.ScryfallError as e:
-                failures.append({"name": de.name, "message": str(e)})
-
+            _resolve_and_append(state, project, de, failures)
         project.save(state.projects_dir)
         return {
             "name": name,
             "entries": len(project.entries),
             "failures": failures,
         }
+
+    @app.post("/api/projects/stream")
+    async def create_project_stream(req: CreateProjectRequest) -> StreamingResponse:
+        """SSE-streaming project creation.
+
+        Emits events so the UI can render a real progress bar:
+          - `phase`     — {phase: "moxfield-fetch" | "resolving"}
+          - `start`     — {total, name}
+          - `progress`  — {index, total, name}
+          - `card`      — {index, name, status, message?}
+          - `done`      — {name, entries, failures}
+          - `error`     — {message} or {failures: [[line, text], …]}
+        """
+        state: AppState = app.state.picker
+        return StreamingResponse(_create_stream(state, req),
+                                  media_type="text/event-stream")
 
     # --- Single project ----------------------------------------------------
     @app.get("/api/projects/{name}")
@@ -549,6 +524,142 @@ async def _save_uploads_to_library(files: "list[UploadFile]") -> list[dict[str, 
             "size": len(data),
         })
     return out
+
+
+def _prepare_new_project(state: "AppState",
+                          req: "CreateProjectRequest",
+                          ) -> "tuple[list[DL.DeckEntry], str]":
+    """Turn a create-project request into a validated (entries, name) pair.
+
+    Handles the three input modes (Moxfield URL, decklist text, empty),
+    raises HTTPException with a useful body on any failure. Shared between
+    the sync and streaming endpoints.
+    """
+    decklist_stripped = (req.decklist or "").strip()
+    entries: list[DL.DeckEntry] = []
+    if MX.looks_like_moxfield(decklist_stripped):
+        try:
+            mox_name, entries = MX.fetch_deck(decklist_stripped)
+        except MX.MoxfieldError as e:
+            raise HTTPException(400, f"Moxfield import failed: {e}") from e
+        raw_name = (req.name or "").strip() or MX.sanitize_project_name(mox_name)
+    elif decklist_stripped:
+        try:
+            entries = DL.parse_text(decklist_stripped)
+        except DL.DecklistError as e:
+            raise HTTPException(400, {"error": "decklist parse failed",
+                                       "failures": e.failures}) from e
+        raw_name = req.name
+    else:
+        raw_name = req.name
+
+    name = _validate_name(raw_name)
+    target = state.projects_dir / f"{name}.json"
+    if target.exists():
+        raise HTTPException(409, f"Project {name!r} already exists")
+    return entries, name
+
+
+def _resolve_and_append(state: "AppState",
+                        project: "Project",
+                        de: "DL.DeckEntry",
+                        failures: list[dict[str, str]]) -> None:
+    """Resolve one decklist entry on Scryfall and append it to the project.
+
+    Failures are captured in `failures` rather than raised, so batch
+    creation always finishes with a saveable project (even if a couple
+    of cards couldn't be resolved).
+    """
+    try:
+        card = state.client.resolve_named(de.name, de.set_code, de.collector_number)
+    except SF.NotFoundError as e:
+        failures.append({"name": de.name, "message": str(e)})
+        return
+    except SF.ScryfallError as e:
+        failures.append({"name": de.name, "message": str(e)})
+        return
+    project.add_entry(Entry(
+        quantity=de.quantity,
+        name=card.get("name", de.name),
+        oracle_id=card.get("oracle_id", ""),
+        selected_print=SelectedPrint(
+            scryfall_id=card["id"],
+            set=card.get("set", ""),
+            collector_number=card.get("collector_number", ""),
+        ),
+        layout=card.get("layout", "normal"),
+        back="face" if card.get("layout") in SF.DFC_LAYOUTS else "standard",
+    ))
+
+
+async def _create_stream(state: "AppState",
+                          req: "CreateProjectRequest") -> AsyncIterator[bytes]:
+    """SSE generator for project creation with per-card progress."""
+
+    def _sse(event: str, data: dict[str, Any]) -> bytes:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    # --- Parse input + validate project name (fast, sync). --------------
+    decklist_stripped = (req.decklist or "").strip()
+    if MX.looks_like_moxfield(decklist_stripped):
+        yield _sse("phase", {"phase": "moxfield-fetch"})
+        try:
+            mox_name, entries = await asyncio.to_thread(
+                MX.fetch_deck, decklist_stripped)
+        except MX.MoxfieldError as e:
+            yield _sse("error", {"message": f"Moxfield import failed: {e}"})
+            return
+        raw_name = (req.name or "").strip() or MX.sanitize_project_name(mox_name)
+    elif decklist_stripped:
+        try:
+            entries = DL.parse_text(decklist_stripped)
+        except DL.DecklistError as e:
+            yield _sse("error", {"failures": e.failures,
+                                  "message": "Decklist parse failed"})
+            return
+        raw_name = req.name
+    else:
+        entries = []
+        raw_name = req.name
+
+    try:
+        name = _validate_name(raw_name)
+    except HTTPException as e:
+        yield _sse("error", {"message": _http_detail_to_str(e.detail)})
+        return
+    target = state.projects_dir / f"{name}.json"
+    if target.exists():
+        yield _sse("error", {"message": f"Project {name!r} already exists"})
+        return
+
+    # --- Resolve each card on Scryfall, streaming progress. --------------
+    total = len(entries)
+    yield _sse("start", {"name": name, "total": total})
+    yield _sse("phase", {"phase": "resolving"})
+
+    project = Project(name=name)
+    failures: list[dict[str, str]] = []
+    for idx, de in enumerate(entries):
+        yield _sse("progress", {"index": idx, "total": total, "name": de.name})
+        # Do the Scryfall call off-thread so the event loop stays responsive.
+        try:
+            await asyncio.to_thread(_resolve_and_append,
+                                     state, project, de, failures)
+        except Exception as e:
+            failures.append({"name": de.name, "message": str(e)})
+
+    project.save(state.projects_dir)
+    yield _sse("done", {
+        "name": name,
+        "entries": len(project.entries),
+        "failures": failures,
+    })
+
+
+def _http_detail_to_str(detail: Any) -> str:
+    if isinstance(detail, str):
+        return detail
+    return json.dumps(detail)
 
 
 def _safe_upload_name(filename: str) -> str:

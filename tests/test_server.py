@@ -5,6 +5,7 @@ Scryfall access is stubbed via a fake client so tests run offline.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,27 @@ from fastapi.testclient import TestClient
 from proxy_studio.project import Entry, PageSettings, Project, SelectedPrint
 from proxy_studio import scryfall as SF
 from proxy_studio import server as srv
+
+
+def _parse_sse_body(body: str) -> list[dict]:
+    """Break an SSE response body into `[{event, data}, …]` blocks."""
+    out: list[dict] = []
+    for block in body.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        event = "message"
+        data_lines: list[str] = []
+        for line in block.split("\n"):
+            if line.startswith(":"):
+                continue  # heartbeat
+            if line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line[5:].strip())
+        data = json.loads("".join(data_lines)) if data_lines else {}
+        out.append({"event": event, "data": data})
+    return out
 
 
 ORACLE = "oracle-sol-ring"
@@ -170,6 +192,56 @@ class TestProjectCreate:
         assert body["entries"] == 1  # only Sol Ring resolved
         assert len(body["failures"]) == 1
         assert body["failures"][0]["name"] == "Unknown Card"
+
+    def test_stream_endpoint_emits_events(self, client):
+        # The SSE endpoint drives the UI's progress overlay. Parse the
+        # response body as an event stream and check the important events
+        # show up in the right order.
+        with client.stream("POST", "/api/projects/stream", json={
+            "name": "streamy", "decklist": "1 Sol Ring\n2 Duress\n",
+        }) as resp:
+            assert resp.status_code == 200
+            assert resp.headers["content-type"].startswith("text/event-stream")
+            body = resp.read().decode()
+
+        events = _parse_sse_body(body)
+        names = [e["event"] for e in events]
+        # Expected sequence for a plain decklist: start → phase → progress×N → done.
+        assert names[0] == "start"
+        assert events[0]["data"]["total"] == 2
+        assert events[0]["data"]["name"] == "streamy"
+        assert "phase" in names
+        assert names.count("progress") == 2
+        assert names[-1] == "done"
+        assert events[-1]["data"]["entries"] == 2
+        assert events[-1]["data"]["failures"] == []
+
+    def test_stream_endpoint_streams_failures_at_the_end(self, client):
+        with client.stream("POST", "/api/projects/stream", json={
+            "name": "s2", "decklist": "1 Sol Ring\n1 Ghost Card\n",
+        }) as resp:
+            body = resp.read().decode()
+        events = _parse_sse_body(body)
+        done = events[-1]
+        assert done["event"] == "done"
+        assert done["data"]["entries"] == 1
+        assert done["data"]["failures"][0]["name"] == "Ghost Card"
+
+    def test_stream_endpoint_reports_moxfield_url_shape(self, client):
+        # We can't hit real Moxfield in tests; verify the phase event fires
+        # by seeing the moxfield-fetch phase attempted (it'll then error
+        # because our FakeClient doesn't expose a Moxfield fetch — the
+        # actual moxfield module is called and fails).
+        with client.stream("POST", "/api/projects/stream", json={
+            "name": "moxy",
+            "decklist": "https://moxfield.com/decks/definitely-not-real",
+        }) as resp:
+            body = resp.read().decode()
+        events = _parse_sse_body(body)
+        phase_events = [e for e in events if e["event"] == "phase"]
+        assert phase_events and phase_events[0]["data"]["phase"] == "moxfield-fetch"
+        # The bogus deck ID makes the fetch fail — surface an error event.
+        assert events[-1]["event"] == "error"
 
 
 class TestProjectDelete:
