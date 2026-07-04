@@ -798,6 +798,7 @@ function setPickerTab(tab) {
         toast(`Could not load library: ${e.message}`, "err");
         libraryState.assets = [];
       }
+      updateLibraryCount();
       renderPickerLibrary();
     })();
   } else if (tab === "printings") {
@@ -877,6 +878,7 @@ async function refreshLibrary() {
     toast(`Could not load library: ${e.message}`, "err");
     libraryState.assets = [];
   }
+  updateLibraryCount();
   renderLibrary();
 }
 
@@ -958,10 +960,22 @@ function updateLibraryButtons() {
   const label = $("#library-selection-count");
   const btn = $("#library-add-selected");
   btn.disabled = n === 0 || !state.activeProject;
-  if (n === 0) label.textContent = "Select assets to add.";
-  else label.textContent = `${n} selected`;
-  if (btn.disabled) btn.textContent = "Add to deck";
-  else btn.textContent = `Add ${n} to deck`;
+  if (!state.activeProject) {
+    label.textContent = "Open a project to add cards to a deck.";
+  } else if (n === 0) {
+    label.textContent = "Select assets to add.";
+  } else {
+    label.textContent = `${n} selected`;
+  }
+  btn.textContent = btn.disabled ? "Add to deck" : `Add ${n} to deck`;
+}
+
+function updateLibraryCount() {
+  const badge = $("#nav-library-count");
+  if (!badge) return;
+  const n = libraryState.assets.length;
+  badge.textContent = String(n);
+  badge.hidden = n === 0;
 }
 
 async function swapEntryWithLibrary(filename) {
@@ -1274,6 +1288,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     entriesFi.value = "";
     if (files.length) await addCardsFromFiles(files);
   });
+
+  // --- Sidebar Library entry ------------------------------------------------
+  // Prime the count once at startup so the badge reflects reality even
+  // before the user opens the library modal for the first time.
+  refreshLibrary().catch(() => {});
+  $("#nav-library")?.addEventListener("click", openLibraryModal);
 
   // --- Library modal wiring ------------------------------------------------
   const libModal = $("#library-modal");

@@ -58,6 +58,18 @@
 
   <main class="layout">
     <aside id="projects-rail" class="projects-rail">
+      <nav class="rail-nav">
+        <button id="nav-library" class="rail-nav-item" type="button" title="Browse and manage your uploaded art library">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="7" height="7" rx="1"/>
+            <rect x="14" y="3" width="7" height="7" rx="1"/>
+            <rect x="3" y="14" width="7" height="7" rx="1"/>
+            <rect x="14" y="14" width="7" height="7" rx="1"/>
+          </svg>
+          <span class="nav-label">Library</span>
+          <span id="nav-library-count" class="nav-count" hidden>0</span>
+        </button>
+      </nav>
       <div class="rail-header rail-header-row">
         <h2>Projects</h2>
         <button id="btn-new-project" class="ghost icon-button" type="button" title="New project">
