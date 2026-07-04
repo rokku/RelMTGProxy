@@ -957,6 +957,153 @@ const libraryState = {
   filter: "",
 };
 
+// --- Backs library ---------------------------------------------------------
+const backsState = {
+  assets: [],
+};
+
+async function openBacksModal() {
+  const dlg = $("#backs-modal");
+  if (!dlg.open) dlg.showModal();
+  await refreshBacks();
+}
+
+function closeBacksModal() {
+  const dlg = $("#backs-modal");
+  if (dlg.open) dlg.close();
+}
+
+async function refreshBacks() {
+  try {
+    backsState.assets = await api("/api/backs");
+  } catch (e) {
+    toast(`Could not load backs: ${e.message}`, "err");
+    backsState.assets = [];
+  }
+  updateBacksCount();
+  renderBacksGrid();
+}
+
+function updateBacksCount() {
+  const badge = $("#nav-backs-count");
+  if (!badge) return;
+  const n = backsState.assets.length;
+  badge.textContent = String(n);
+  badge.hidden = n === 0;
+}
+
+function renderBacksGrid() {
+  const grid = $("#backs-grid");
+  grid.innerHTML = "";
+  const current = state.project?.default_back_filename || null;
+  const status = $("#backs-selection-status");
+  const clearBtn = $("#backs-clear-default");
+
+  if (!state.activeProject) {
+    status.textContent = "Open a project to set its default back image.";
+    clearBtn.hidden = true;
+  } else if (current) {
+    status.textContent = `Current default for "${state.activeProject}": ${current}`;
+    clearBtn.hidden = false;
+  } else {
+    status.textContent = `No back chosen for "${state.activeProject}" — click one to set it, or leave for the built-in default.`;
+    clearBtn.hidden = true;
+  }
+
+  $("#backs-empty").hidden = backsState.assets.length > 0;
+
+  for (const asset of backsState.assets) {
+    const isSelected = asset.filename === current;
+    const tile = el("div", {
+      class: `library-item ${isSelected ? "selected" : ""}`,
+      onclick: () => setProjectBack(asset.filename),
+    },
+      el("div", { class: "img-wrap" },
+        el("img", { src: asset.url, alt: asset.filename, loading: "lazy" }),
+      ),
+      el("div", { class: "check" },
+        svgIcon('<path d="M20 6L9 17l-5-5"/>', 12),
+      ),
+      el("button", {
+        class: "del-lib",
+        title: "Delete back",
+        "aria-label": `Delete ${asset.filename}`,
+        onclick: async (ev) => {
+          ev.stopPropagation();
+          await deleteBack(asset.filename);
+        },
+      }, ICON_X()),
+      el("div", { class: "caption", title: asset.filename }, asset.filename),
+    );
+    grid.append(tile);
+  }
+}
+
+async function setProjectBack(filename) {
+  if (!state.activeProject) {
+    toast("Open a project first, then pick a back for it.", "err");
+    return;
+  }
+  try {
+    const res = await api(
+      `/api/projects/${encodeURIComponent(state.activeProject)}/default-back`,
+      { method: "POST", body: JSON.stringify({ filename }) },
+    );
+    state.project.default_back_filename = res.default_back_filename;
+    renderBacksGrid();
+    toast(`Default back for "${state.activeProject}" set to ${filename}`, "ok");
+  } catch (e) {
+    toast(`Set failed: ${e.message}`, "err");
+  }
+}
+
+async function clearProjectBack() {
+  if (!state.activeProject) return;
+  try {
+    await api(
+      `/api/projects/${encodeURIComponent(state.activeProject)}/default-back`,
+      { method: "POST", body: JSON.stringify({ filename: null }) },
+    );
+    state.project.default_back_filename = null;
+    renderBacksGrid();
+    toast("Reverted to built-in default back", "ok");
+  } catch (e) {
+    toast(`Reset failed: ${e.message}`, "err");
+  }
+}
+
+async function deleteBack(filename) {
+  const ok = await confirmAction(
+    `Remove "${filename}" from the backs library? Any project currently using it will fall back to the built-in default.`,
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/backs/${encodeURIComponent(filename)}`, { method: "DELETE" });
+  } catch (e) {
+    toast(`Delete failed: ${e.message}`, "err");
+    return;
+  }
+  // If the deleted file was the current project's default, clear the ref.
+  if (state.project?.default_back_filename === filename) {
+    state.project.default_back_filename = null;
+  }
+  await refreshBacks();
+  toast(`Removed ${filename}`, "ok");
+}
+
+async function uploadBacks(files) {
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f, f.name);
+  try {
+    await api("/api/backs/uploads", { method: "POST", body: fd });
+  } catch (e) {
+    toast(`Upload failed: ${e.message}`, "err");
+    return;
+  }
+  toast(`Uploaded ${files.length} back image${files.length === 1 ? "" : "s"}`, "ok");
+  await refreshBacks();
+}
+
 async function openLibraryModal() {
   const dlg = $("#library-modal");
   libraryState.selected.clear();
@@ -1394,11 +1541,26 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (files.length) await addCardsFromFiles(files);
   });
 
-  // --- Sidebar Library entry ------------------------------------------------
-  // Prime the count once at startup so the badge reflects reality even
-  // before the user opens the library modal for the first time.
+  // --- Sidebar Library + Backs entries ------------------------------------
   refreshLibrary().catch(() => {});
+  refreshBacks().catch(() => {});
   $("#nav-library")?.addEventListener("click", openLibraryModal);
+  $("#nav-backs")?.addEventListener("click", openBacksModal);
+
+  // Backs modal wiring
+  const backsModal = $("#backs-modal");
+  $("#backs-close")?.addEventListener("click", closeBacksModal);
+  backsModal?.addEventListener("click", (ev) => {
+    if (ev.target === backsModal) closeBacksModal();
+  });
+  const backsFi = $("#backs-file-input");
+  $("#backs-upload-more")?.addEventListener("click", () => backsFi?.click());
+  backsFi?.addEventListener("change", async (ev) => {
+    const files = Array.from(ev.target.files || []);
+    backsFi.value = "";
+    if (files.length) await uploadBacks(files);
+  });
+  $("#backs-clear-default")?.addEventListener("click", clearProjectBack);
 
   // --- Library modal wiring ------------------------------------------------
   const libModal = $("#library-modal");

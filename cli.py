@@ -414,8 +414,22 @@ def cmd_export(args: argparse.Namespace) -> int:
                                              upscaler=upscaler)
             UP.check_dpi_gate(img_path, warn=args.dpi_warn,
                                fail=args.dpi_fail, label=entry.name)
+            # Custom entries still need a back image resolved when the user
+            # asked for duplex/separate — falls back to the standard back
+            # (or the project's chosen library back, once that ships below).
+            custom_back = None
+            if need_backs:
+                try:
+                    custom_back = BK.resolve_back_image(
+                        entry, client=client, upscaler=upscaler,
+                        scale=args.scale,
+                        library_filename=project.default_back_filename)
+                except BK.BackResolutionError as e:
+                    print(f"error: {e}", file=sys.stderr)
+                    return 2
             render_cards.append(RenderCard(image_path=img_path, name=entry.name,
-                                            quantity=entry.quantity))
+                                            quantity=entry.quantity,
+                                            back_image_path=custom_back))
             continue
 
         card = client.resolve_named(
@@ -444,7 +458,8 @@ def cmd_export(args: argparse.Namespace) -> int:
         if need_backs:
             try:
                 back_path = BK.resolve_back_image(
-                    entry, client=client, upscaler=upscaler, scale=args.scale)
+                    entry, client=client, upscaler=upscaler, scale=args.scale,
+                    library_filename=project.default_back_filename)
             except BK.BackResolutionError as e:
                 print(f"error: {e}", file=sys.stderr)
                 return 2

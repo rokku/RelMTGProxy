@@ -76,6 +76,14 @@
           <span class="nav-label">Library</span>
           <span id="nav-library-count" class="nav-count" hidden>0</span>
         </button>
+        <button id="nav-backs" class="rail-nav-item" type="button" title="Manage card-back images used for the reverse of your prints">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="4" y="3" width="16" height="18" rx="2"/>
+            <path d="M9 8h6M9 12h6M9 16h4"/>
+          </svg>
+          <span class="nav-label">Backs</span>
+          <span id="nav-backs-count" class="nav-count" hidden>0</span>
+        </button>
       </nav>
       <div class="rail-header rail-header-row">
         <h2>Projects</h2>
@@ -304,6 +312,34 @@
       <div class="lib-actions">
         <button id="library-upload-more" class="ghost" type="button">Upload more…</button>
         <button id="library-add-selected" class="primary" type="button" disabled>Add to deck</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Backs library (modal) -->
+  <dialog id="backs-modal" class="picker-modal library-modal">
+    <div class="picker-modal-header">
+      <div>
+        <h2>Card backs</h2>
+        <p class="dim" id="backs-subtitle">Pick which back image the current deck uses when exporting.</p>
+      </div>
+      <button id="backs-close" class="ghost icon-button" type="button" title="Close (Esc)">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="library-scroll">
+      <div id="backs-grid" class="library-grid"></div>
+      <div id="backs-empty" class="deck-empty" hidden>
+        <p>No back images uploaded yet.</p>
+        <p class="dim">Upload one and it'll appear here as an option for every deck.</p>
+      </div>
+    </div>
+    <div class="library-footer">
+      <span id="backs-selection-status" class="dim">Click a back to make it this deck's default.</span>
+      <div class="lib-actions">
+        <button id="backs-clear-default" class="ghost" type="button" hidden>Use built-in default</button>
+        <button id="backs-upload-more" class="primary" type="button">Upload back…</button>
+        <input id="backs-file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
       </div>
     </div>
   </dialog>

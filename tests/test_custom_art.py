@@ -27,9 +27,12 @@ class FakeClient:
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    # Point the upload root at a temp dir so tests don't touch the real cache.
+    # Point the upload + backs roots at a temp dir so tests don't touch the
+    # real cache.
     monkeypatch.setattr(srv, "UPLOADS_ROOT", tmp_path / "uploads")
+    monkeypatch.setattr(srv, "BACKS_ROOT", tmp_path / "backs")
     (tmp_path / "uploads").mkdir()
+    (tmp_path / "backs").mkdir()
     app = srv.create_app(projects_dir=tmp_path / "projects",
                          cache_dir=tmp_path / "cache")
     app.state.picker.client = FakeClient()
@@ -328,6 +331,64 @@ class TestSelectLibraryForEntry:
         r = client.post("/api/projects/d3/entries/99/select-library",
                         json={"filename": "x.png"})
         assert r.status_code == 400
+
+
+class TestBacksLibrary:
+    def test_upload_lands_in_backs_dir(self, client, tmp_path):
+        r = client.post("/api/backs/uploads", files=[
+            ("files", ("plain_black.png", _png_bytes(), "image/png")),
+        ])
+        assert r.status_code == 201
+        assert (tmp_path / "backs" / "plain_black.png").exists()
+
+    def test_list_backs(self, client):
+        client.post("/api/backs/uploads", files=[
+            ("files", ("one.png", _png_bytes(), "image/png")),
+            ("files", ("two.png", _png_bytes(color=(0,200,0)), "image/png")),
+        ])
+        r = client.get("/api/backs")
+        assert r.status_code == 200
+        names = sorted(a["filename"] for a in r.json())
+        assert names == ["one.png", "two.png"]
+
+    def test_delete_back(self, client, tmp_path):
+        client.post("/api/backs/uploads", files=[
+            ("files", ("gone.png", _png_bytes(), "image/png")),
+        ])
+        r = client.delete("/api/backs/gone.png")
+        assert r.status_code == 204
+        assert not (tmp_path / "backs" / "gone.png").exists()
+
+    def test_set_project_default_back(self, client, tmp_path):
+        client.post("/api/projects", json={"name": "p", "decklist": ""})
+        client.post("/api/backs/uploads", files=[
+            ("files", ("brown.png", _png_bytes(), "image/png")),
+        ])
+        r = client.post("/api/projects/p/default-back",
+                        json={"filename": "brown.png"})
+        assert r.status_code == 200
+        assert r.json()["default_back_filename"] == "brown.png"
+
+        # Round-trip through disk.
+        proj = Project.load("p", tmp_path / "projects")
+        assert proj.default_back_filename == "brown.png"
+
+    def test_set_default_back_rejects_missing_file(self, client):
+        client.post("/api/projects", json={"name": "p", "decklist": ""})
+        r = client.post("/api/projects/p/default-back",
+                        json={"filename": "ghost.png"})
+        assert r.status_code == 404
+
+    def test_clear_default_back(self, client, tmp_path):
+        client.post("/api/projects", json={"name": "p", "decklist": ""})
+        client.post("/api/backs/uploads", files=[
+            ("files", ("x.png", _png_bytes(), "image/png")),
+        ])
+        client.post("/api/projects/p/default-back", json={"filename": "x.png"})
+        r = client.post("/api/projects/p/default-back", json={"filename": None})
+        assert r.status_code == 200
+        proj = Project.load("p", tmp_path / "projects")
+        assert proj.default_back_filename is None
 
 
 class TestEntryThumbSurface:

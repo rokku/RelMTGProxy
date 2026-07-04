@@ -51,6 +51,7 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 ASSETS_DIR = Path(__file__).parent.parent / "assets"
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
 UPLOADS_ROOT = Path(__file__).parent.parent / "cache" / "images" / "custom"
+BACKS_ROOT = Path(__file__).parent.parent / "cache" / "images" / "backs"
 
 # Shared asset library — one dir, referenced from any project. Underscore
 # prefix avoids clashing with a project literally named "library" (the name
@@ -100,6 +101,10 @@ class SelectLibraryRequest(BaseModel):
     filename: str
 
 
+class SetDefaultBackRequest(BaseModel):
+    filename: str | None = None
+
+
 @dataclass
 class AppState:
     projects_dir: Path
@@ -129,6 +134,8 @@ def create_app(projects_dir: str | Path = "projects",
     app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
     UPLOADS_ROOT.mkdir(parents=True, exist_ok=True)
     app.mount("/uploads", StaticFiles(directory=UPLOADS_ROOT), name="uploads")
+    BACKS_ROOT.mkdir(parents=True, exist_ok=True)
+    app.mount("/backs", StaticFiles(directory=BACKS_ROOT), name="backs")
     return app
 
 
@@ -302,6 +309,85 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
             })
         project.save(state.projects_dir)
         return {"added": added, "entries": len(project.entries)}
+
+    # ------------------- Backs library -----------------------------------
+    @app.get("/api/backs")
+    def list_backs() -> list[dict[str, Any]]:
+        BACKS_ROOT.mkdir(parents=True, exist_ok=True)
+        out: list[dict[str, Any]] = []
+        for p in sorted(BACKS_ROOT.iterdir()):
+            if not p.is_file():
+                continue
+            if p.suffix.lower() not in _ALLOWED_UPLOAD_EXTS:
+                continue
+            st = p.stat()
+            out.append({
+                "filename": p.name,
+                "url": f"/backs/{p.name}",
+                "size": st.st_size,
+                "modified": st.st_mtime,
+            })
+        return out
+
+    @app.post("/api/backs/uploads", status_code=201)
+    async def upload_to_backs(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+        BACKS_ROOT.mkdir(parents=True, exist_ok=True)
+        added: list[dict[str, Any]] = []
+        for uf in files:
+            ext = Path(uf.filename or "").suffix.lower()
+            if ext not in _ALLOWED_UPLOAD_EXTS:
+                raise HTTPException(400,
+                    f"Unsupported file type {ext!r}. Use PNG, JPG or WebP.")
+            data = await uf.read()
+            if not data:
+                continue
+            if len(data) > _MAX_UPLOAD_BYTES:
+                raise HTTPException(400,
+                    f"{uf.filename}: file too large "
+                    f"({len(data) / 1024 / 1024:.1f} MB)")
+            safe = _safe_upload_name(uf.filename or f"back{ext}")
+            target = _unique_path(BACKS_ROOT / safe)
+            target.write_bytes(data)
+            added.append({
+                "filename": target.name,
+                "url": f"/backs/{target.name}",
+                "size": len(data),
+            })
+        return {"added": added,
+                "total_in_library": len(list(BACKS_ROOT.iterdir()))}
+
+    @app.delete("/api/backs/{filename}", status_code=204)
+    def delete_back(filename: str) -> None:
+        safe = _safe_upload_name(filename)
+        if "/" in safe or "\\" in safe or safe.startswith("."):
+            raise HTTPException(400, "invalid filename")
+        path = BACKS_ROOT / safe
+        if not path.exists():
+            raise HTTPException(404, f"back {filename!r} not found")
+        path.unlink()
+
+    @app.post("/api/projects/{name}/default-back")
+    def set_project_default_back(name: str,
+                                   req: SetDefaultBackRequest) -> dict[str, Any]:
+        """Set (or clear) the project's default back image.
+
+        Passing `{"filename": null}` clears the setting so exports fall back
+        to `assets/mtg_back.png` or the generated placeholder.
+        """
+        state: AppState = app.state.picker
+        project = _load(name, state)
+        if req.filename is not None:
+            safe = _safe_upload_name(req.filename)
+            if "/" in safe or "\\" in safe or safe.startswith("."):
+                raise HTTPException(400, "invalid filename")
+            if not (BACKS_ROOT / safe).exists():
+                raise HTTPException(404, f"back {req.filename!r} not in library")
+            project.default_back_filename = safe
+        else:
+            project.default_back_filename = None
+        project.save(state.projects_dir)
+        return {"ok": True,
+                "default_back_filename": project.default_back_filename}
 
     # ------------------- Persistent art library --------------------------
     @app.get("/api/library")
@@ -832,8 +918,12 @@ def _dpi_gate_kw(image_path, label):
     return UP.check_dpi_gate(image_path, label=label)
 
 
-def _resolve_back(entry, client, upscaler):
-    return BK.resolve_back_image(entry, client=client, upscaler=upscaler)
+def _resolve_back(entry, client, upscaler, library_filename=None):
+    return BK.resolve_back_image(
+        entry, client=client, upscaler=upscaler,
+        library_filename=library_filename,
+        library_dir=BACKS_ROOT,
+    )
 
 
 async def _run_with_heartbeats(fn, *args):
@@ -974,9 +1064,25 @@ async def _export_stream(state: AppState, *, project_name: str,
                     yield _sse("error", {"index": idx, "name": entry.name,
                                           "message": str(e)})
                     return
+
+                # Custom entries still need a back if the user asked for
+                # duplex or separate — without this the render step barfs
+                # with "these cards have no back image resolved".
+                custom_back = None
+                if backs_mode != "none":
+                    try:
+                        custom_back = await asyncio.to_thread(
+                            _resolve_back, entry, state.client, upscaler,
+                            project.default_back_filename)
+                    except BK.BackResolutionError as e:
+                        yield _sse("error", {"index": idx, "name": entry.name,
+                                              "message": str(e)})
+                        return
+
                 render_cards.append(RenderCard(image_path=image_path,
                                                 name=entry.name,
-                                                quantity=entry.quantity))
+                                                quantity=entry.quantity,
+                                                back_image_path=custom_back))
                 continue
 
             yield _sse("progress", {"index": idx, "total": total,
@@ -1044,6 +1150,7 @@ async def _export_stream(state: AppState, *, project_name: str,
                 try:
                     async for item in _run_with_heartbeats(
                         _resolve_back, entry, state.client, upscaler,
+                        project.default_back_filename,
                     ):
                         if isinstance(item, tuple) and item and item[0] == "__result__":
                             back_path = item[1]

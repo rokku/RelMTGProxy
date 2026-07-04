@@ -31,6 +31,10 @@ DEFAULT_ASSETS_DIR = Path("assets")
 STANDARD_BACK_FILENAME = "mtg_back.png"
 PLACEHOLDER_PATH = Path("cache/images/original/_placeholder_back.png")
 
+# Shared backs library — files here are selectable per-project as the
+# default card back. Mirrors the art library at cache/images/custom/_library/.
+BACKS_LIBRARY_DIR = Path("cache/images/backs")
+
 # Target pixel dims for a placeholder ~600 DPI at 63×88 mm — matches the
 # upscaled front pipeline so the DPI gate passes without re-upscaling.
 _PLACEHOLDER_W = 1490
@@ -43,22 +47,43 @@ class BackResolutionError(RuntimeError):
     pass
 
 
-def get_standard_back(assets_dir: Path = DEFAULT_ASSETS_DIR) -> Path:
+def get_standard_back(assets_dir: Path = DEFAULT_ASSETS_DIR,
+                       *, library_filename: str | None = None,
+                       library_dir: Path = BACKS_LIBRARY_DIR) -> Path:
     """Return the image path for the standard MTG card back.
 
-    Prefers `assets/mtg_back.png`. Falls back to a generated placeholder in
-    `cache/` with a one-time warning explaining how to supply the real image.
+    Resolution order:
+      1. `library_filename` — the caller (usually a Project) has picked a
+         specific file from the backs library.
+      2. `assets/mtg_back.png` — a real scan the user dropped in.
+      3. First file in the backs library, if any.
+      4. A generated placeholder card in `cache/`, with a one-time warning.
     """
+    lib_dir = Path(library_dir)
+
+    if library_filename:
+        cand = lib_dir / library_filename
+        if cand.exists() and cand.stat().st_size > 0:
+            return cand
+        log.warning("Project's chosen back %r not found in library; "
+                    "falling back to the default.", library_filename)
+
     real = Path(assets_dir) / STANDARD_BACK_FILENAME
     if real.exists() and real.stat().st_size > 0:
         return real
 
+    if lib_dir.exists():
+        for candidate in sorted(lib_dir.iterdir()):
+            if candidate.is_file() and candidate.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                return candidate
+
     global _WARN_SUPPLIED_ONCE
     if not _WARN_SUPPLIED_ONCE:
         log.warning(
-            "No standard MTG back image found at %s. Using a generated "
-            "placeholder. Supply a clean ~600 DPI scan you have rights to "
-            "use at that path to replace it.", real,
+            "No standard MTG back image found at %s and no files in %s. "
+            "Using a generated placeholder — drop a scan into either path "
+            "to replace it, or upload one via the backs library in the UI.",
+            real, lib_dir,
         )
         _WARN_SUPPLIED_ONCE = True
 
@@ -115,15 +140,20 @@ def _write_placeholder(path: Path) -> None:
 def resolve_back_image(entry, *, client: SF.ScryfallClient,
                         upscaler: UP.UpscaleBackend | None = None,
                         scale: int = UP.DEFAULT_TARGET_SCALE,
-                        assets_dir: Path = DEFAULT_ASSETS_DIR) -> Path:
+                        assets_dir: Path = DEFAULT_ASSETS_DIR,
+                        library_filename: str | None = None,
+                        library_dir: Path = BACKS_LIBRARY_DIR) -> Path:
     """Return the image path to use as the back face for this deck entry.
 
     - `back == "face"`: uses card_faces[1] from Scryfall for the selected
       printing; upscaled if an upscaler is provided.
-    - `back == "standard"`: bundled standard back (or placeholder).
+    - `back == "standard"`: bundled standard back, or the file the project
+      has picked from the backs library, or the placeholder.
     """
     if entry.back == "standard":
-        return get_standard_back(assets_dir)
+        return get_standard_back(assets_dir,
+                                  library_filename=library_filename,
+                                  library_dir=library_dir)
 
     if entry.back != "face":
         raise BackResolutionError(f"Unknown back mode {entry.back!r}")

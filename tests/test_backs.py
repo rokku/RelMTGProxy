@@ -56,7 +56,7 @@ class TestStandardBackPlaceholder:
             got = BK.get_standard_back(assets_dir=tmp_path / "no-assets")
         assert got == placeholder
         assert placeholder.exists()
-        assert any("Supply a clean" in r.message for r in caplog.records)
+        assert any("placeholder" in r.message.lower() for r in caplog.records)
 
     def test_placeholder_is_correct_size(self, tmp_path, monkeypatch):
         placeholder = tmp_path / "p.png"

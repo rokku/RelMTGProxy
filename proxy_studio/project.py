@@ -52,6 +52,9 @@ class Project:
                           .strftime("%Y-%m-%dT%H:%M:%SZ"))
     page_settings: PageSettings = field(default_factory=PageSettings)
     entries: list[Entry] = field(default_factory=list)
+    # Which file from the backs library to use for `back: "standard"` cards.
+    # `None` = fall back to assets/mtg_back.png or the placeholder.
+    default_back_filename: str | None = None
 
     # --- I/O ---------------------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
@@ -81,7 +84,8 @@ class Project:
             for e in d.get("entries", [])
         ]
         return cls(name=d["name"], created=d.get("created", ""),
-                   page_settings=ps, entries=entries)
+                   page_settings=ps, entries=entries,
+                   default_back_filename=d.get("default_back_filename"))
 
     def save(self, projects_dir: str | Path = PROJECTS_DIR) -> Path:
         dir_ = Path(projects_dir)
