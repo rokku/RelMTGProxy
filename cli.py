@@ -208,9 +208,13 @@ def _setup_ncnn(args: argparse.Namespace) -> int:
     binary = vendor_dir / UP.BINARY_NAME
     models_dir = vendor_dir / "models"
 
-    if not args.force and binary.exists() and models_dir.exists():
-        print(f"Already installed at {binary}. Re-run with --force to reinstall.")
-        return 0
+    # Base bundle is already there → skip the download step but still let
+    # `_install_custom_ncnn_models` add any newly-declared community models.
+    base_installed = binary.exists() and models_dir.exists()
+    if base_installed and not args.force:
+        print(f"Base binary already installed at {binary}. "
+              "Checking custom models…")
+        return _install_custom_ncnn_models(vendor_dir, args)
 
     if args.force and vendor_dir.exists():
         shutil.rmtree(vendor_dir)
@@ -295,6 +299,65 @@ def _setup_ncnn(args: argparse.Namespace) -> int:
     for line in out[:6]:
         print(f"  {line}")
     print("OK.")
+    return _install_custom_ncnn_models(vendor_dir, args)
+
+
+def _install_custom_ncnn_models(vendor_dir: Path,
+                                 args: argparse.Namespace) -> int:
+    """Fetch community-model `.bin`/`.param` pairs into `models/`.
+
+    Iterates `UP.MODELS` and downloads any entry whose ncnn_bin_url is set
+    (base-bundle models leave these None). Honours `--model NAME` to scope
+    to a single quality, and `--force` to redownload existing files.
+    """
+    import urllib.request
+
+    models_dir = vendor_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.model == "all":
+        wanted = list(UP.MODELS.keys())
+    elif args.model in UP.MODELS:
+        wanted = [args.model]
+    else:
+        print(f"error: unknown --model {args.model!r}. "
+              f"Choose one of: {list(UP.MODELS)}, or 'all'.", file=sys.stderr)
+        return 2
+
+    installed_any = False
+    for quality in wanted:
+        spec = UP.MODELS[quality]
+        if not spec.ncnn_bin_url or not spec.ncnn_param_url:
+            # Base-bundle model — already extracted from the main zip.
+            continue
+        bin_target = models_dir / f"{spec.ncnn_name}.bin"
+        param_target = models_dir / f"{spec.ncnn_name}.param"
+        already = bin_target.exists() and param_target.exists()
+        if already and not args.force:
+            print(f"[{quality}] already at {bin_target}")
+            continue
+        for url, target in ((spec.ncnn_bin_url, bin_target),
+                             (spec.ncnn_param_url, param_target)):
+            print(f"[{quality}] downloading {url}")
+            try:
+                with urllib.request.urlopen(url, timeout=180) as resp:
+                    data = resp.read()
+            except Exception as e:
+                print(f"error: download failed: {e}", file=sys.stderr)
+                return 2
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            tmp.write_bytes(data)
+            tmp.replace(target)
+            print(f"[{quality}] wrote {target} "
+                  f"({len(data) / 1024 / 1024:.1f} MB)")
+        installed_any = True
+
+    if not installed_any and args.model != "all":
+        # If the user asked specifically for a base-bundle model, treat as OK.
+        spec = UP.MODELS.get(args.model)
+        if spec is not None and not spec.ncnn_bin_url:
+            print(f"[{args.model}] shipped with the base ncnn bundle — "
+                  "nothing extra to fetch.")
     return 0
 
 
@@ -574,10 +637,13 @@ def build_parser() -> argparse.ArgumentParser:
                           default="auto",
                           help="Which upscaler backend to use (default: auto — "
                                "prefer MPS on Apple Silicon, else ncnn)")
-    p_export.add_argument("--quality", choices=["quality", "fast"],
+    p_export.add_argument("--quality", choices=list(UP.MODELS),
                           default="quality",
                           help="'quality' = x4plus (default); 'fast' = "
-                               "x4plus-anime (~4× faster, subtle detail loss)")
+                               "x4plus-anime (~4× faster, subtle detail loss); "
+                               "'ultramix' = Upscayl's Ultramix Balanced "
+                               "(ncnn only; run setup-upscaler --model "
+                               "ultramix first)")
     p_export.add_argument("--dpi-warn", type=float, default=550.0,
                           dest="dpi_warn",
                           help="Warn threshold (spec §7 default 550)")
@@ -621,10 +687,11 @@ def build_parser() -> argparse.ArgumentParser:
                          help="'ncnn' = prebuilt binary (universal); 'mps' = "
                               "PyTorch weights for native Apple Silicon speed")
     p_setup.add_argument("--model", default="all",
-                         help="For --backend mps: which weights to fetch — "
-                              "'quality' (x4plus), 'fast' (x4plus-anime), "
-                              "or 'all' (default). The ncnn bundle already "
-                              "includes both.")
+                         help="Which model to install: 'quality' (x4plus), "
+                              "'fast' (x4plus-anime), 'ultramix' (Upscayl "
+                              "Balanced), or 'all' (default). x4plus and "
+                              "x4plus-anime ship in the base ncnn bundle; "
+                              "ultramix is fetched separately.")
     p_setup.add_argument("--force", action="store_true",
                          help="Reinstall even if already present")
     p_setup.set_defaults(func=cmd_setup_upscaler)
@@ -637,8 +704,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_up.add_argument("--backend", choices=["auto", "mps", "ncnn"],
                       default="auto",
                       help="Which upscaler backend to use (default: auto)")
-    p_up.add_argument("--quality", choices=["quality", "fast"], default="quality",
-                      help="'quality' (default) or 'fast' — see `export --help`")
+    p_up.add_argument("--quality", choices=list(UP.MODELS), default="quality",
+                      help="'quality' (default), 'fast', or 'ultramix' — "
+                           "see `export --help`")
     p_up.set_defaults(func=cmd_upscale)
 
     return p

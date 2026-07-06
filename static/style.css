@@ -677,6 +677,79 @@ button.icon-button svg { flex: 0 0 auto; }
   color: var(--text-2);
 }
 
+/* Trailing "+ Add card / + Add token" placeholder tiles. Same silhouette as
+   a real deck-card so they slot cleanly into the grid, but visibly dashed
+   so the affordance is unmistakable. */
+.deck-card.add-tile {
+  background: linear-gradient(135deg,
+    rgba(139, 92, 246, 0.06),
+    rgba(34, 211, 238, 0.04));
+  border: 2px dashed rgba(167, 139, 250, 0.6);
+  transition: transform 160ms var(--ease-out),
+              border-color 160ms var(--ease),
+              background 160ms var(--ease);
+}
+.deck-card.add-tile-token {
+  background: linear-gradient(135deg,
+    rgba(244, 114, 182, 0.06),
+    rgba(251, 191, 36, 0.04));
+  border-color: rgba(244, 114, 182, 0.55);
+}
+.deck-card.add-tile:hover {
+  transform: translateY(-3px);
+  border-color: rgba(167, 139, 250, 0.95);
+  background: linear-gradient(135deg,
+    rgba(139, 92, 246, 0.14),
+    rgba(34, 211, 238, 0.10));
+  box-shadow: 0 12px 28px rgba(139, 92, 246, 0.25);
+}
+.deck-card.add-tile-token:hover {
+  border-color: rgba(244, 114, 182, 0.95);
+  background: linear-gradient(135deg,
+    rgba(244, 114, 182, 0.14),
+    rgba(251, 191, 36, 0.10));
+  box-shadow: 0 12px 28px rgba(244, 114, 182, 0.25);
+}
+.deck-card.add-tile .img-wrap {
+  background: transparent;
+}
+.deck-card.add-tile .add-tile-inner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--violet);
+  transition: color 160ms var(--ease), transform 200ms var(--ease-out);
+}
+.deck-card.add-tile-token .add-tile-inner { color: var(--pink); }
+.deck-card.add-tile:hover .add-tile-inner {
+  color: var(--text-0);
+  transform: scale(1.05);
+}
+.deck-card.add-tile .add-tile-label {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-0);
+}
+
+/* Search-modal — the small search box sits inline in the header alongside
+   the title and close button. */
+.search-modal-input {
+  min-width: 320px;
+}
+.search-modal-input input {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  outline: none;
+  width: 100%;
+  font: inherit;
+}
+
 /* --- Legacy entry-list styles (kept for compatibility) ---------------- */
 /* --- Entry list --------------------------------------------------------- */
 .entry-list {
@@ -804,6 +877,31 @@ button.icon-button svg { flex: 0 0 auto; }
   cursor: pointer;
 }
 .chip select option { background: var(--bg-2); color: var(--text-0); }
+
+/* Alignment chip — compact form with two mm inputs + a test button. */
+.align-chip { gap: 6px; }
+.align-chip input[type="number"] {
+  width: 4.6em;
+  padding: 3px 6px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-0);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.align-chip input[type="number"]:focus {
+  outline: none;
+  border-color: var(--border-brand);
+  box-shadow: 0 0 0 2px rgba(139,92,246,0.18);
+}
+.tiny-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: var(--r-full);
+  gap: 4px;
+}
 
 /* --- Printings grid ----------------------------------------------------- */
 .printings-scroll {

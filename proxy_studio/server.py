@@ -24,6 +24,7 @@ import asyncio
 import json
 import logging
 import re
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -41,7 +42,7 @@ from . import upscale as UP
 from .layout import PageSpec
 from .pdf_export import (
     DEFAULT_CUT_COLOR, RenderCard, default_output_path, parse_hex_color,
-    render_pdf,
+    render_pdf, render_registration_test,
 )
 from .project import Entry, Project, SelectedPrint
 
@@ -103,6 +104,11 @@ class SelectLibraryRequest(BaseModel):
 
 class SetDefaultBackRequest(BaseModel):
     filename: str | None = None
+
+
+class FromScryfallRequest(BaseModel):
+    scryfall_id: str
+    quantity: int = 1
 
 
 @dataclass
@@ -310,6 +316,30 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
         project.save(state.projects_dir)
         return {"added": added, "entries": len(project.entries)}
 
+    @app.get("/api/registration-test")
+    def get_registration_test(flip_edge: str = "long",
+                                back_offset_x: float = 0.0,
+                                back_offset_y: float = 0.0) -> FileResponse:
+        """Return the two-page duplex registration PDF as a download.
+
+        Same content as `python cli.py testpage`, but streamable through
+        the browser so the user can iterate on the offsets without hitting
+        the terminal. Landed in `output/` so it's greppable by timestamp.
+        """
+        if flip_edge not in ("long", "short"):
+            raise HTTPException(400, "flip_edge must be 'long' or 'short'")
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        out = OUTPUT_DIR / f"registration_test_{ts}.pdf"
+        render_registration_test(
+            out,
+            flip_edge=flip_edge,     # type: ignore[arg-type]
+            back_offset_x_mm=back_offset_x,
+            back_offset_y_mm=back_offset_y,
+        )
+        return FileResponse(out, media_type="application/pdf",
+                             filename=out.name)
+
     # ------------------- Backs library -----------------------------------
     @app.get("/api/backs")
     def list_backs() -> list[dict[str, Any]]:
@@ -500,6 +530,69 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
         thumb_url = f"/uploads/{LIBRARY_DIRNAME}/{asset.name}"
         return {"ok": True, "entry": _entry_view(entry, state, card=None,
                                                    thumb_url_override=thumb_url)}
+
+    @app.get("/api/scryfall/search")
+    def scryfall_search(q: str, kind: str = "card",
+                        limit: int = 30) -> dict[str, Any]:
+        """Search Scryfall's card database for cards or tokens.
+
+        `kind` narrows to normal cards (`card`, excludes tokens) or tokens
+        (`token`, adds `t:token`). Returns at most `limit` thumbnail rows.
+        """
+        state: AppState = app.state.picker
+        term = (q or "").strip()
+        if not term:
+            return {"results": [], "total_cards": 0}
+        if kind not in ("card", "token"):
+            raise HTTPException(400, "kind must be 'card' or 'token'")
+        limit = max(1, min(60, limit))
+        # `unique=cards` collapses art variants — one row per named card,
+        # which is what we want for an "add this card to the deck" search.
+        # The token filter keeps only tokens; the card filter excludes them.
+        modifier = "t:token" if kind == "token" else "-t:token"
+        query = f"{modifier} {term}".strip()
+        url = (f"{SF.API_BASE}/cards/search"
+               f"?q={urllib.parse.quote(query)}&unique=cards&order=released")
+        data = state.client._get_json(url)
+        if data.get("__http_status") == 404:
+            return {"results": [], "total_cards": 0}
+        rows = list(data.get("data", []))[:limit]
+        return {
+            "results": [_thumbnail_view(p) for p in rows],
+            "total_cards": data.get("total_cards", len(rows)),
+        }
+
+    @app.post("/api/projects/{name}/entries/from-scryfall", status_code=201)
+    def add_entry_from_scryfall(name: str,
+                                 req: FromScryfallRequest) -> dict[str, Any]:
+        """Add a new deck entry by Scryfall card id."""
+        state: AppState = app.state.picker
+        project = _load(name, state)
+        if req.quantity < 1:
+            raise HTTPException(400, "quantity must be >= 1")
+        card = state.client._get_json(f"{SF.API_BASE}/cards/{req.scryfall_id}")
+        if card.get("__http_status") == 404:
+            raise HTTPException(404,
+                f"Card {req.scryfall_id!r} not found on Scryfall")
+        entry = Entry(
+            quantity=req.quantity,
+            name=card.get("name", ""),
+            oracle_id=card.get("oracle_id", ""),
+            selected_print=SelectedPrint(
+                scryfall_id=card["id"],
+                set=card.get("set", ""),
+                collector_number=card.get("collector_number", ""),
+            ),
+            layout=card.get("layout", "normal"),
+            back="face" if card.get("layout") in SF.DFC_LAYOUTS else "standard",
+        )
+        project.entries.append(entry)
+        project.save(state.projects_dir)
+        return {
+            "ok": True,
+            "index": len(project.entries) - 1,
+            "entry": _entry_view(entry, state, card=card),
+        }
 
     @app.post("/api/projects/{name}/select")
     def select_printing(name: str, req: SelectRequest) -> dict[str, Any]:

@@ -69,6 +69,52 @@ function hasFiles(dt) {
   return dt && Array.from(dt.types || []).includes("Files");
 }
 
+// --- Back-alignment offsets (persist per-browser — they describe the
+// printer, not the deck, so once you dial your printer in they're set
+// for every future export).
+const OFFSET_KEYS = ["relmtgproxy:back-offset-x", "relmtgproxy:back-offset-y"];
+
+function loadOffsets() {
+  const x = parseFloat(localStorage.getItem(OFFSET_KEYS[0]) || "0");
+  const y = parseFloat(localStorage.getItem(OFFSET_KEYS[1]) || "0");
+  return { x: Number.isFinite(x) ? x : 0, y: Number.isFinite(y) ? y : 0 };
+}
+function saveOffsets(x, y) {
+  localStorage.setItem(OFFSET_KEYS[0], String(x));
+  localStorage.setItem(OFFSET_KEYS[1], String(y));
+}
+function currentOffsets() {
+  const xInput = $("#back-offset-x");
+  const yInput = $("#back-offset-y");
+  const x = parseFloat(xInput?.value ?? "0") || 0;
+  const y = parseFloat(yInput?.value ?? "0") || 0;
+  return { x, y };
+}
+function applyOffsetsToInputs({ x, y }) {
+  const xi = $("#back-offset-x");
+  const yi = $("#back-offset-y");
+  if (xi) xi.value = String(x);
+  if (yi) yi.value = String(y);
+}
+
+async function downloadRegistrationTest() {
+  const { x, y } = currentOffsets();
+  const params = new URLSearchParams({
+    flip_edge: "long",
+    back_offset_x: String(x),
+    back_offset_y: String(y),
+  });
+  // Trigger a real browser download via a temporary anchor — that way
+  // the browser handles the file save + shows progress in its own UI.
+  const a = document.createElement("a");
+  a.href = `/api/registration-test?${params}`;
+  a.download = "registration_test.pdf";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  toast("Registration test PDF downloading — duplex-print on plain paper.", "ok");
+}
+
 // --- Deck-grid zoom --------------------------------------------------------
 const ZOOM_KEY = "relmtgproxy:deck-columns";
 const ZOOM_MIN = 2;
@@ -154,6 +200,7 @@ function setView(v) {
   $("#backs-picker").hidden = v !== "deck";
   $("#upscale-toggle").hidden = v !== "deck";
   $("#quality-picker").hidden = v !== "deck";
+  $("#align-controls").hidden = v !== "deck";
 }
 
 // --- Projects ---------------------------------------------------------------
@@ -550,8 +597,47 @@ function renderDeckGrid() {
       : `${total} ${suffix}`;
   $("#deck-empty").hidden = total !== 0;
 
+  // Trailing "+ Add card" / "+ Add token" placeholders — always visible so
+  // an empty deck still has an obvious way to add its first card via search.
+  // Hidden while the user is filtering, since they'd sit at the wrong place
+  // in the visible list.
+  if (!needle) {
+    grid.append(makeAddTile("card", "Add card",
+      "Search Scryfall for a card by name"));
+    grid.append(makeAddTile("token", "Add token",
+      "Search Scryfall for a token by name"));
+  }
+
   // Ensure the grid-level drop handler is attached once the grid exists.
   _wireGridLevelDrop();
+}
+
+function makeAddTile(kind, label, sub) {
+  return el("div", {
+    class: `deck-card add-tile add-tile-${kind}`,
+    role: "button",
+    tabindex: "0",
+    "aria-label": label,
+    title: label,
+    onclick: () => openSearchModal(kind),
+    onkeydown: (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        openSearchModal(kind);
+      }
+    },
+  },
+    el("div", { class: "img-wrap" },
+      el("div", { class: "add-tile-inner" },
+        svgIcon('<path d="M12 5v14"/><path d="M5 12h14"/>', 28),
+        el("div", { class: "add-tile-label" }, label),
+      ),
+    ),
+    el("div", { class: "caption" },
+      el("div", { class: "card-name" }, label),
+      el("div", { class: "card-sub" }, sub),
+    ),
+  );
 }
 
 // --- Drag/drop reordering (deck grid) --------------------------------------
@@ -1157,6 +1243,7 @@ function renderLibraryGrid(container, { mode, filter, emptyEl }) {
       "data-filename": asset.filename,
       onclick: () => {
         if (mode === "swap") swapEntryWithLibrary(asset.filename);
+        else if (mode === "add") addLibraryToDeck(asset.filename);
         else toggleLibrarySelection(asset.filename);
       },
     },
@@ -1322,6 +1409,245 @@ function closeAddArtMenu() {
   btn.setAttribute("aria-expanded", "false");
 }
 
+// --- Scryfall search (add card / add token) --------------------------------
+const searchState = {
+  kind: "card",       // "card" | "token"
+  tab: "scryfall",    // "scryfall" | "library"
+  query: "",
+  reqId: 0,           // monotonic to discard out-of-order fetches
+  debounceTimer: null,
+};
+
+function openSearchModal(kind) {
+  if (!state.activeProject) {
+    toast("Open a project first to add cards.", "err");
+    return;
+  }
+  searchState.kind = kind === "token" ? "token" : "card";
+  searchState.query = "";
+  const dlg = $("#search-modal");
+  const input = $("#search-input");
+  const results = $("#search-results");
+  const empty = $("#search-empty");
+  const emptyTitle = $("#search-empty-title");
+  const emptySub = $("#search-empty-sub");
+
+  $("#search-title").textContent =
+    searchState.kind === "token" ? "Add token" : "Add card";
+  $("#search-subtitle").textContent =
+    searchState.kind === "token"
+      ? "Search Scryfall for a token by name — or pick one from your library."
+      : "Search Scryfall for a card by name — or pick one from your library.";
+  input.placeholder = searchState.kind === "token"
+    ? "e.g. Zombie, Treasure, Angel…"
+    : "e.g. Sol Ring, Lightning Bolt…";
+  emptyTitle.textContent = searchState.kind === "token"
+    ? "Type a token name above."
+    : "Type a card name above.";
+  emptySub.textContent = "Click any result to add it to this deck.";
+
+  input.value = "";
+  results.innerHTML = "";
+  empty.hidden = false;
+
+  const libFilter = $("#search-library-filter");
+  if (libFilter) libFilter.value = "";
+
+  setSearchTab("scryfall");
+
+  if (!dlg.open) dlg.showModal();
+  setTimeout(() => input.focus(), 30);
+}
+
+function setSearchTab(tab) {
+  searchState.tab = tab === "library" ? "library" : "scryfall";
+  const scryScroll = $("#search-scroll");
+  const libScroll = $("#search-library-scroll");
+  const inputWrap = $("#search-input-wrap");
+  const tabScry = $("#search-tab-scryfall");
+  const tabLib = $("#search-tab-library");
+
+  scryScroll.hidden = searchState.tab !== "scryfall";
+  libScroll.hidden = searchState.tab !== "library";
+  // The main search box drives Scryfall only; hide it on the library tab
+  // (which has its own filter field baked into the toolbar).
+  if (inputWrap) inputWrap.hidden = searchState.tab !== "scryfall";
+
+  tabScry.classList.toggle("active", searchState.tab === "scryfall");
+  tabLib.classList.toggle("active", searchState.tab === "library");
+  tabScry.setAttribute("aria-selected", searchState.tab === "scryfall");
+  tabLib.setAttribute("aria-selected", searchState.tab === "library");
+
+  if (searchState.tab === "library") {
+    (async () => {
+      try {
+        libraryState.assets = await api("/api/library");
+      } catch (e) {
+        toast(`Could not load library: ${e.message}`, "err");
+        libraryState.assets = [];
+      }
+      updateLibraryCount();
+      renderSearchLibrary();
+    })();
+  } else {
+    setTimeout(() => $("#search-input")?.focus(), 30);
+  }
+}
+
+function renderSearchLibrary() {
+  renderLibraryGrid($("#search-library-grid"), {
+    mode: "add",
+    filter: $("#search-library-filter")?.value || "",
+    emptyEl: $("#search-library-empty"),
+  });
+}
+
+async function addLibraryToDeck(filename) {
+  if (!state.activeProject) return;
+  try {
+    await api(
+      `/api/projects/${encodeURIComponent(state.activeProject)}/entries/from-library`,
+      { method: "POST", body: JSON.stringify({ filenames: [filename] }) },
+    );
+  } catch (e) {
+    toast(`Add failed: ${e.message}`, "err");
+    return;
+  }
+  closeSearchModal();
+  state.project = await api(`/api/projects/${encodeURIComponent(state.activeProject)}`);
+  const newIndex = state.project.entries.length - 1;
+  await refreshEntryThumb(newIndex);
+  await refreshProjects();
+  renderDeckGrid();
+  toast(`Added ${filename}`, "ok");
+}
+
+function closeSearchModal() {
+  const dlg = $("#search-modal");
+  if (dlg.open) dlg.close();
+  if (searchState.debounceTimer) {
+    clearTimeout(searchState.debounceTimer);
+    searchState.debounceTimer = null;
+  }
+}
+
+function scheduleSearch(rawQuery) {
+  const query = (rawQuery || "").trim();
+  searchState.query = query;
+  if (searchState.debounceTimer) clearTimeout(searchState.debounceTimer);
+  const empty = $("#search-empty");
+  const emptyTitle = $("#search-empty-title");
+  const emptySub = $("#search-empty-sub");
+  const results = $("#search-results");
+  if (!query) {
+    results.innerHTML = "";
+    empty.hidden = false;
+    emptyTitle.textContent = searchState.kind === "token"
+      ? "Type a token name above."
+      : "Type a card name above.";
+    emptySub.textContent = "Click any result to add it to this deck.";
+    return;
+  }
+  searchState.debounceTimer = setTimeout(() => runSearch(query), 220);
+}
+
+async function runSearch(query) {
+  const results = $("#search-results");
+  const empty = $("#search-empty");
+  const emptyTitle = $("#search-empty-title");
+  const emptySub = $("#search-empty-sub");
+  const reqId = ++searchState.reqId;
+  emptyTitle.textContent = "Searching Scryfall…";
+  emptySub.textContent = "";
+  empty.hidden = false;
+  results.innerHTML = "";
+
+  const params = new URLSearchParams({ q: query, kind: searchState.kind });
+  let data;
+  try {
+    data = await api(`/api/scryfall/search?${params}`);
+  } catch (e) {
+    if (reqId !== searchState.reqId) return;
+    empty.hidden = false;
+    emptyTitle.textContent = "Search failed.";
+    emptySub.textContent = e.message || "Try again in a moment.";
+    return;
+  }
+  if (reqId !== searchState.reqId) return;
+
+  const rows = data.results || [];
+  if (rows.length === 0) {
+    empty.hidden = false;
+    emptyTitle.textContent = "No results.";
+    emptySub.textContent = searchState.kind === "token"
+      ? "Try a broader name — e.g. \"Treasure\" or \"Zombie\"."
+      : "Check the spelling or try a partial name.";
+    return;
+  }
+  empty.hidden = true;
+  for (const p of rows) {
+    results.append(makeSearchTile(p));
+  }
+}
+
+function makeSearchTile(p) {
+  const imgWrap = el("div", { class: "img-wrap" });
+  if (p.image_url) {
+    imgWrap.append(el("img", {
+      class: "face", src: p.image_url, alt: p.name, loading: "lazy",
+    }));
+  }
+  if (p.back_image_url) {
+    imgWrap.append(el("img", {
+      class: "face-back", src: p.back_image_url,
+      alt: `${p.name} (back)`, loading: "lazy",
+    }));
+  }
+  const setYear = p.released_at?.slice(0, 4) || "";
+  return el("div", {
+    class: "printing",
+    "data-id": p.id,
+    onclick: () => addFromSearch(p),
+  },
+    imgWrap,
+    el("div", { class: "caption" },
+      el("div", { class: "set-line" },
+        el("span", { class: "set-code" }, (p.set || "").toUpperCase()),
+        el("span", { class: "set-name" },
+          [p.name, [p.set_name, setYear].filter(Boolean).join(" · ")]
+            .filter(Boolean).join(" — ")),
+      ),
+      el("div", { class: "cn" },
+        `#${p.collector_number || "?"}${p.digital ? " · digital" : ""}${p.lang && p.lang !== "en" ? " · " + p.lang : ""}`),
+    ),
+  );
+}
+
+async function addFromSearch(printing) {
+  if (!state.activeProject) return;
+  const button = $("#search-close");
+  try {
+    button.disabled = true;
+    await api(
+      `/api/projects/${encodeURIComponent(state.activeProject)}/entries/from-scryfall`,
+      { method: "POST", body: JSON.stringify({ scryfall_id: printing.id }) },
+    );
+  } catch (e) {
+    toast(`Add failed: ${e.message}`, "err");
+    button.disabled = false;
+    return;
+  }
+  button.disabled = false;
+  closeSearchModal();
+  // Re-fetch the project and thumbs so the new entry appears in the grid.
+  state.project = await api(`/api/projects/${encodeURIComponent(state.activeProject)}`);
+  const newIndex = state.project.entries.length - 1;
+  await refreshEntryThumb(newIndex);
+  await refreshProjects();
+  renderDeckGrid();
+  toast(`Added ${printing.name}`, "ok");
+}
+
 async function addCardsFromFiles(files) {
   if (!files || !files.length || !state.activeProject) return;
   try {
@@ -1360,7 +1686,12 @@ function runExport() {
   const backs = $("#backs-mode")?.value || "none";
   const upscale = $("#upscale-checkbox")?.checked ? "true" : "false";
   const quality = $("#quality-mode")?.value || "quality";
-  const params = new URLSearchParams({ backs, upscale, quality });
+  const { x: offsetX, y: offsetY } = currentOffsets();
+  const params = new URLSearchParams({
+    backs, upscale, quality,
+    back_offset_x: String(offsetX),
+    back_offset_y: String(offsetY),
+  });
   fetch(`/api/projects/${encodeURIComponent(state.activeProject)}/export?${params}`, {
     method: "POST",
   }).then(async (resp) => {
@@ -1611,6 +1942,32 @@ window.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  // --- Scryfall search modal ---------------------------------------------
+  const searchModal = $("#search-modal");
+  $("#search-close")?.addEventListener("click", closeSearchModal);
+  searchModal?.addEventListener("click", (ev) => {
+    if (ev.target === searchModal) closeSearchModal();
+  });
+  searchModal?.addEventListener("close", () => {
+    if (searchState.debounceTimer) {
+      clearTimeout(searchState.debounceTimer);
+      searchState.debounceTimer = null;
+    }
+  });
+  $("#search-input")?.addEventListener("input", (ev) => {
+    scheduleSearch(ev.target.value);
+  });
+  $("#search-input")?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      if (searchState.debounceTimer) clearTimeout(searchState.debounceTimer);
+      runSearch(searchState.query);
+    }
+  });
+  $("#search-tab-scryfall")?.addEventListener("click", () => setSearchTab("scryfall"));
+  $("#search-tab-library")?.addEventListener("click", () => setSearchTab("library"));
+  $("#search-library-filter")?.addEventListener("input", renderSearchLibrary);
+
   // Modal picker close: close button + Esc + backdrop click.
   const pickerModal = $("#picker-modal");
   $("#picker-close")?.addEventListener("click", closePickerModal);
@@ -1628,6 +1985,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     // means the user hit the backdrop area.
     if (ev.target === pickerModal) closePickerModal();
   });
+
+  // --- Back-alignment offsets --------------------------------------------
+  applyOffsetsToInputs(loadOffsets());
+  const persistOffsets = () => {
+    const { x, y } = currentOffsets();
+    saveOffsets(x, y);
+  };
+  $("#back-offset-x")?.addEventListener("change", persistOffsets);
+  $("#back-offset-y")?.addEventListener("change", persistOffsets);
+  $("#btn-align-test")?.addEventListener("click", downloadRegistrationTest);
 
   // --- Deck-grid zoom -----------------------------------------------------
   applyZoom(loadZoom());
@@ -1650,6 +2017,7 @@ document.addEventListener("keydown", (ev) => {
   if (state.view !== "deck") return;
   if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
   if ($("#picker-modal")?.open) return;
+  if ($("#search-modal")?.open) return;
   if (ev.key === "+" || ev.key === "=") {
     ev.preventDefault();
     applyZoom(currentZoom() - 1);   // + = fewer/larger cards (zoom in)

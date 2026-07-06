@@ -31,6 +31,7 @@
         <select id="quality-mode">
           <option value="quality">Best (x4plus)</option>
           <option value="fast">Fast (x4plus-anime, ~4× faster)</option>
+          <option value="ultramix">Ultramix Balanced (Upscayl)</option>
         </select>
       </label>
       <label id="backs-picker" class="chip" hidden>
@@ -41,6 +42,16 @@
           <option value="separate">Separate file</option>
         </select>
       </label>
+      <div id="align-controls" class="chip align-chip" hidden title="If your printer misaligns fronts and backs, measure the drift with the alignment test and enter the offsets here (in mm).">
+        <span>Align</span>
+        <input id="back-offset-x" type="number" step="0.1" value="0" aria-label="Back offset X (mm)">
+        <span class="dim">×</span>
+        <input id="back-offset-y" type="number" step="0.1" value="0" aria-label="Back offset Y (mm)">
+        <button id="btn-align-test" class="ghost tiny-btn" type="button" title="Download a two-page duplex test PDF">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>
+          Test
+        </button>
+      </div>
       <button id="btn-export" class="primary" hidden>
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 3v12"/><path d="m6 9 6-6 6 6"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>
@@ -312,6 +323,54 @@
       <div class="lib-actions">
         <button id="library-upload-more" class="ghost" type="button">Upload more…</button>
         <button id="library-add-selected" class="primary" type="button" disabled>Add to deck</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Scryfall search (modal) -->
+  <dialog id="search-modal" class="picker-modal">
+    <div class="picker-modal-header">
+      <div class="picker-title-block">
+        <h2 id="search-title">Add card</h2>
+        <p id="search-subtitle" class="dim">Search Scryfall by name.</p>
+      </div>
+      <div class="picker-tabs" role="tablist">
+        <button class="picker-tab active" id="search-tab-scryfall" data-tab="scryfall" role="tab" type="button">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          Scryfall
+        </button>
+        <button class="picker-tab" id="search-tab-library" data-tab="library" role="tab" type="button">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          Library
+        </button>
+      </div>
+      <div class="search-input search-modal-input" id="search-input-wrap">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="search-input" type="search" placeholder="Type to search…" autocomplete="off" spellcheck="false">
+      </div>
+      <button id="search-close" class="ghost icon-button" type="button" title="Close (Esc)">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="search-scroll" class="printings-scroll" role="tabpanel">
+      <div id="search-results" class="printings-grid"></div>
+      <div id="search-empty" class="deck-empty" hidden>
+        <p id="search-empty-title">Type a card name above.</p>
+        <p class="dim" id="search-empty-sub">Click any result to add it to this deck.</p>
+      </div>
+    </div>
+    <div id="search-library-scroll" class="library-scroll" role="tabpanel" hidden>
+      <div class="library-tab-toolbar">
+        <label class="chip">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="search-library-filter" type="search" placeholder="Filter library…" style="background:transparent;border:0;color:inherit;outline:none;width:160px;font:inherit">
+        </label>
+        <span class="dim" style="font-size:12px">Click any asset to add it to this deck.</span>
+      </div>
+      <div id="search-library-grid" class="library-grid"></div>
+      <div id="search-library-empty" class="deck-empty" hidden>
+        <p>Your library is empty.</p>
+        <p class="dim">Close this and use <strong>Add art → Upload new files</strong> to seed it.</p>
       </div>
     </div>
   </dialog>

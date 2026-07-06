@@ -72,6 +72,16 @@ class FakeClient:
             if ORACLE in url:
                 return {"has_more": False, "data": self.printings}
             return {"has_more": False, "data": [self.duress]}
+        # Text search — used by the Scryfall search endpoint.
+        if "/cards/search?q=" in url:
+            import urllib.parse as _up
+            decoded = _up.unquote(url).lower()
+            all_cards = self.printings + [self.duress]
+            if "t:token" in decoded and "-t:token" not in decoded:
+                # Nothing in the fake fixture is a token.
+                return {"has_more": False, "data": [], "total_cards": 0}
+            hits = [p for p in all_cards if p["name"].lower() in decoded]
+            return {"has_more": False, "data": hits, "total_cards": len(hits)}
         for p in self.printings + [self.duress]:
             if f"/cards/{p['id']}" in url:
                 return p
@@ -361,6 +371,77 @@ class TestEntryCrud:
 
     def test_delete_entry_bad_index_is_400(self, seeded_client):
         assert seeded_client.delete("/api/projects/unit/entries/99").status_code == 400
+
+
+class TestScryfallSearch:
+    def test_empty_query_returns_empty(self, client):
+        r = client.get("/api/scryfall/search", params={"q": "  "})
+        assert r.status_code == 200
+        assert r.json() == {"results": [], "total_cards": 0}
+
+    def test_finds_card_by_name(self, client):
+        r = client.get("/api/scryfall/search", params={"q": "Sol Ring"})
+        assert r.status_code == 200
+        results = r.json()["results"]
+        assert any(row["id"] == SR_ID for row in results)
+
+    def test_token_kind_uses_token_filter(self, client):
+        # FakeClient returns nothing for token queries; we're checking that
+        # the endpoint routes the kind parameter through without error.
+        r = client.get("/api/scryfall/search",
+                       params={"q": "Zombie", "kind": "token"})
+        assert r.status_code == 200
+        assert r.json()["results"] == []
+
+    def test_rejects_bad_kind(self, client):
+        r = client.get("/api/scryfall/search",
+                       params={"q": "Sol", "kind": "banana"})
+        assert r.status_code == 400
+
+
+class TestAddEntryFromScryfall:
+    def test_appends_entry(self, seeded_client, tmp_path):
+        r = seeded_client.post("/api/projects/unit/entries/from-scryfall",
+                               json={"scryfall_id": SR_ID_2})
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["ok"] is True
+        assert body["index"] == 2
+        assert body["entry"]["name"] == "Sol Ring"
+        assert body["entry"]["selected_print"]["scryfall_id"] == SR_ID_2
+
+        reloaded = Project.load("unit", tmp_path / "projects")
+        assert len(reloaded.entries) == 3
+        assert reloaded.entries[-1].selected_print.scryfall_id == SR_ID_2
+
+    def test_missing_card_is_404(self, seeded_client):
+        r = seeded_client.post("/api/projects/unit/entries/from-scryfall",
+                               json={"scryfall_id": "does-not-exist"})
+        assert r.status_code == 404
+
+    def test_bad_quantity_is_400(self, seeded_client):
+        r = seeded_client.post("/api/projects/unit/entries/from-scryfall",
+                               json={"scryfall_id": SR_ID, "quantity": 0})
+        assert r.status_code == 400
+
+
+class TestRegistrationTestEndpoint:
+    def test_returns_pdf(self, client):
+        r = client.get("/api/registration-test")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/pdf")
+        # ReportLab always writes a %PDF- header at the start.
+        assert r.content.startswith(b"%PDF-")
+
+    def test_offsets_accepted(self, client):
+        r = client.get("/api/registration-test",
+                       params={"back_offset_x": "1.5", "back_offset_y": "-0.8"})
+        assert r.status_code == 200
+
+    def test_rejects_bad_flip_edge(self, client):
+        r = client.get("/api/registration-test",
+                       params={"flip_edge": "sideways"})
+        assert r.status_code == 400
 
 
 class TestNameValidation:

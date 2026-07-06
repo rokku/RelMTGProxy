@@ -46,15 +46,29 @@ DEFAULT_QUALITY: QualityName = "quality"
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """One selectable model — same architecture family, different depths."""
+    """One selectable model — same architecture family, different depths.
+
+    `mps_weights_*` are optional: some community models (Ultramix) ship as
+    ncnn `.bin` + `.param` only and have no PyTorch `.pth` equivalent.
+    Those entries only run under the ncnn-vulkan backend.
+
+    `ncnn_bin_url` / `ncnn_param_url` point at model files fetched *in
+    addition to* the base ncnn-vulkan bundle — set for custom community
+    models (Ultramix). Leave them None for models that ship inside the
+    upstream v0.2.5.0 bundle (x4plus, x4plus-anime).
+    """
     ncnn_name: str            # matches the `-n` arg on the ncnn-vulkan binary
-    mps_weights_filename: str
-    mps_weights_url: str
+    mps_weights_filename: str | None
+    mps_weights_url: str | None
     num_block: int            # RRDBNet depth (23 for x4plus, 6 for x4plus-anime)
     description: str
+    ncnn_bin_url: str | None = None
+    ncnn_param_url: str | None = None
 
 
-# Two options today; adding more is a matter of dropping in another entry.
+# Adding a new model is a matter of dropping in another entry: point ncnn_*_url
+# at the raw files if it isn't in the upstream Real-ESRGAN bundle, and give it
+# a `mps_weights_*` pair if a matching `.pth` exists.
 MODELS: dict[str, ModelSpec] = {
     "quality": ModelSpec(
         ncnn_name="realesrgan-x4plus",
@@ -71,6 +85,19 @@ MODELS: dict[str, ModelSpec] = {
                           "download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth"),
         num_block=6,
         description="~4× faster, slight softening of fine detail (6-block RRDBNet).",
+    ),
+    "ultramix": ModelSpec(
+        ncnn_name="ultramix-balanced-4x",
+        # No public `.pth` release — Upscayl bundles ncnn files only.
+        mps_weights_filename=None,
+        mps_weights_url=None,
+        num_block=23,
+        description=("Ultramix Balanced — Upscayl's community-tuned x4plus, "
+                     "often sharper on illustrated card art. (ncnn only.)"),
+        ncnn_bin_url=("https://raw.githubusercontent.com/upscayl/upscayl/"
+                      "main/resources/models/ultramix-balanced-4x.bin"),
+        ncnn_param_url=("https://raw.githubusercontent.com/upscayl/upscayl/"
+                        "main/resources/models/ultramix-balanced-4x.param"),
     ),
 }
 
@@ -130,6 +157,17 @@ class NcnnVulkanUpscaler:
             raise UpscalerNotAvailable(
                 f"models directory not found under {self.vendor_dir}. "
                 "Re-run `python cli.py setup-upscaler`."
+            )
+        # For community models fetched separately, confirm the specific
+        # .bin/.param pair is present — the base bundle only ships x4plus
+        # and x4plus-anime.
+        bin_path = self._models_dir / f"{self.model}.bin"
+        param_path = self._models_dir / f"{self.model}.param"
+        if not (bin_path.exists() and param_path.exists()):
+            raise UpscalerNotAvailable(
+                f"ncnn model {self.model!r} missing from {self._models_dir}. "
+                f"Run `python cli.py setup-upscaler --model {self.quality}` "
+                f"to fetch it."
             )
 
     def _resolve_binary(self) -> Path:
@@ -238,6 +276,11 @@ class MpsUpscaler:
             raise ValueError(f"Unknown quality {self.quality!r}; "
                               f"expected one of {list(MODELS)}")
         self._model_spec = MODELS[self.quality]
+        if self._model_spec.mps_weights_filename is None:
+            raise UpscalerNotAvailable(
+                f"Quality {self.quality!r} has no MPS/PyTorch weights — "
+                f"only the ncnn-vulkan backend can run it. Use --backend ncnn."
+            )
         if self.weights_path is None:
             self.weights_path = MPS_VENDOR_DIR / self._model_spec.mps_weights_filename
         self.weights_path = Path(self.weights_path)
@@ -405,9 +448,26 @@ class MpsUpscaler:
 
 def mps_weights_installed(vendor_dir: Path = MPS_VENDOR_DIR,
                            *, quality: QualityName = DEFAULT_QUALITY) -> bool:
-    filename = MODELS[quality].mps_weights_filename if quality in MODELS \
-                else MODELS[DEFAULT_QUALITY].mps_weights_filename
-    return (Path(vendor_dir) / filename).exists()
+    spec = MODELS.get(quality) or MODELS[DEFAULT_QUALITY]
+    if spec.mps_weights_filename is None:
+        return False
+    return (Path(vendor_dir) / spec.mps_weights_filename).exists()
+
+
+def ncnn_model_installed(vendor_dir: Path = DEFAULT_VENDOR_DIR,
+                          *, quality: QualityName = DEFAULT_QUALITY) -> bool:
+    """True if the ncnn `.bin` + `.param` for `quality` are on disk.
+
+    Base-bundle models (x4plus, x4plus-anime) live under models/ post
+    `setup-upscaler`; custom models get installed by the same command.
+    """
+    spec = MODELS.get(quality) or MODELS[DEFAULT_QUALITY]
+    binary_dir = Path(vendor_dir) / "models"
+    if not binary_dir.exists():
+        return False
+    bin_ok = (binary_dir / f"{spec.ncnn_name}.bin").exists()
+    param_ok = (binary_dir / f"{spec.ncnn_name}.param").exists()
+    return bin_ok and param_ok
 
 
 def torch_mps_available() -> bool:
