@@ -196,11 +196,10 @@ function setView(v) {
   $("#landing").hidden = v !== "landing";
   $("#new-project").hidden = v !== "new";
   $("#deck-view").hidden = v !== "deck";
-  $("#btn-export").hidden = v !== "deck";
-  $("#backs-picker").hidden = v !== "deck";
-  $("#upscale-toggle").hidden = v !== "deck";
-  $("#quality-picker").hidden = v !== "deck";
-  $("#align-controls").hidden = v !== "deck";
+  const inDeck = v === "deck";
+  $("#upscale-group").hidden = !inDeck;
+  $("#backs-group").hidden = !inDeck;
+  $("#export-group").hidden = !inDeck;
 }
 
 // --- Projects ---------------------------------------------------------------
@@ -1648,6 +1647,233 @@ async function addFromSearch(printing) {
   toast(`Added ${printing.name}`, "ok");
 }
 
+// --- Upscaler comparison test ---------------------------------------------
+const upscaleTestState = {
+  query: "",
+  reqId: 0,
+  debounceTimer: null,
+  runningId: null,   // Scryfall id of the currently-running test
+};
+
+function openUpscaleTestModal() {
+  const dlg = $("#upscale-test-modal");
+  showUpscaleStep("search");
+  const input = $("#upscale-test-input");
+  input.value = "";
+  $("#upscale-test-results").innerHTML = "";
+  $("#upscale-test-hint").textContent =
+    "Click a card in the results to run the test.";
+  if (!dlg.open) dlg.showModal();
+  setTimeout(() => input.focus(), 30);
+}
+
+function closeUpscaleTestModal() {
+  const dlg = $("#upscale-test-modal");
+  if (dlg.open) dlg.close();
+  if (upscaleTestState.debounceTimer) {
+    clearTimeout(upscaleTestState.debounceTimer);
+    upscaleTestState.debounceTimer = null;
+  }
+  upscaleTestState.runningId = null;
+}
+
+function showUpscaleStep(step) {
+  $("#upscale-test-search").hidden = step !== "search";
+  $("#upscale-test-running").hidden = step !== "running";
+  $("#upscale-test-done").hidden = step !== "done";
+}
+
+function scheduleUpscaleTestSearch(rawQuery) {
+  const query = (rawQuery || "").trim();
+  upscaleTestState.query = query;
+  if (upscaleTestState.debounceTimer) clearTimeout(upscaleTestState.debounceTimer);
+  const results = $("#upscale-test-results");
+  const hint = $("#upscale-test-hint");
+  if (!query) {
+    results.innerHTML = "";
+    hint.textContent = "Click a card in the results to run the test.";
+    return;
+  }
+  upscaleTestState.debounceTimer = setTimeout(() => runUpscaleTestSearch(query), 220);
+}
+
+async function runUpscaleTestSearch(query) {
+  const results = $("#upscale-test-results");
+  const hint = $("#upscale-test-hint");
+  const reqId = ++upscaleTestState.reqId;
+  hint.textContent = "Searching Scryfall…";
+  results.innerHTML = "";
+  const params = new URLSearchParams({ q: query, kind: "card" });
+  let data;
+  try {
+    data = await api(`/api/scryfall/search?${params}`);
+  } catch (e) {
+    if (reqId !== upscaleTestState.reqId) return;
+    hint.textContent = `Search failed: ${e.message}`;
+    return;
+  }
+  if (reqId !== upscaleTestState.reqId) return;
+  const rows = data.results || [];
+  if (rows.length === 0) {
+    hint.textContent = "No results.";
+    return;
+  }
+  hint.textContent = "Click a card to start the test.";
+  for (const p of rows) {
+    results.append(el("div", {
+      class: "printing",
+      "data-id": p.id,
+      onclick: () => startUpscaleTest(p),
+    },
+      el("div", { class: "img-wrap" },
+        p.image_url
+          ? el("img", { class: "face", src: p.image_url, alt: p.name, loading: "lazy" })
+          : null,
+      ),
+      el("div", { class: "caption" },
+        el("div", { class: "set-line" },
+          el("span", { class: "set-code" }, (p.set || "").toUpperCase()),
+          el("span", { class: "set-name" }, p.name),
+        ),
+        el("div", { class: "cn" }, `#${p.collector_number || "?"}`),
+      ),
+    ));
+  }
+}
+
+async function startUpscaleTest(printing) {
+  upscaleTestState.runningId = printing.id;
+  showUpscaleStep("running");
+  $("#upscale-test-thumb").src = printing.image_url || "";
+  $("#upscale-test-name").textContent =
+    `${printing.name} — ${(printing.set || "?").toUpperCase()} ${printing.collector_number || ""}`;
+  $("#upscale-test-status").textContent = "Starting…";
+  $("#upscale-test-bar").style.width = "0%";
+
+  const resp = await fetch(
+    `/api/upscale-test/stream?scryfall_id=${encodeURIComponent(printing.id)}`,
+    { method: "POST" },
+  );
+  if (!resp.ok || !resp.body) {
+    toast(`Test failed: ${resp.status} ${resp.statusText}`, "err");
+    showUpscaleStep("search");
+    return;
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let totalModels = 3;
+  let modelIdx = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) !== -1) {
+      const raw = buf.slice(0, idx); buf = buf.slice(idx + 2);
+      const evt = parseSSE(raw);
+      if (!evt) continue;
+      if (upscaleTestState.runningId !== printing.id) {
+        // User closed / started another test — bail out.
+        try { reader.cancel(); } catch {}
+        return;
+      }
+      if (evt.event === "start") {
+        totalModels = (evt.data.models || []).length || 3;
+      } else if (evt.event === "progress") {
+        const { phase, quality, index, total } = evt.data;
+        if (phase === "download") {
+          $("#upscale-test-status").textContent = "Downloading source image…";
+        } else if (phase === "upscale") {
+          modelIdx = index;
+          $("#upscale-test-status").textContent =
+            `Upscaling ${index + 1}/${total} · ${quality} (native 4×)…`;
+          $("#upscale-test-bar").style.width =
+            `${((index) / total) * 100}%`;
+        } else if (phase === "downsample") {
+          $("#upscale-test-status").textContent =
+            `Downsampling ${quality} → 2× (600 DPI)…`;
+          $("#upscale-test-bar").style.width =
+            `${((index + 0.5) / total) * 100}%`;
+        }
+      } else if (evt.event === "done") {
+        renderUpscaleTestResults(evt.data);
+        $("#upscale-test-bar").style.width = "100%";
+      } else if (evt.event === "error") {
+        toast(`Test failed: ${evt.data.message || "unknown"}`, "err");
+        showUpscaleStep("search");
+        return;
+      }
+    }
+  }
+}
+
+function renderUpscaleTestResults(data) {
+  showUpscaleStep("done");
+  $("#upscale-test-done-name").textContent = data.name || "";
+  $("#upscale-test-done-sub").textContent =
+    `Scryfall id: ${data.scryfall_id} · click any tile for full-size preview.`;
+
+  const grid = $("#upscale-test-grid");
+  grid.innerHTML = "";
+  const rows = [
+    { label: "1200 DPI (native 4× — no downsample)", key: "1200" },
+    { label: "600 DPI (LANCZOS downsample from 4×)", key: "600" },
+  ];
+  // Column header row: model names
+  const header = el("div", { class: "upscale-test-row upscale-test-header" },
+    el("div", { class: "upscale-test-corner" }, ""),
+    ...data.results.map((r) => el("div", { class: "upscale-test-colhead" },
+      el("div", { class: "colhead-title" }, r.quality),
+      el("div", { class: "colhead-sub" }, r.model),
+    )),
+  );
+  grid.append(header);
+
+  for (const row of rows) {
+    const rowEl = el("div", { class: "upscale-test-row" },
+      el("div", { class: "upscale-test-rowhead" }, row.label),
+      ...data.results.map((r) => {
+        const url = row.key === "1200" ? r.url_1200 : r.url_600;
+        const dpi = row.key === "1200" ? r.dpi_1200 : r.dpi_600;
+        if (!url) {
+          const msg = r.unavailable || r.error || "Not available";
+          return el("div", { class: "upscale-test-cell disabled" },
+            el("div", { class: "cell-empty" }, msg),
+          );
+        }
+        return el("div", {
+          class: "upscale-test-cell",
+          onclick: () => openUpscaleLightbox(url,
+            `${r.quality} · ${row.label}` +
+            (dpi ? ` · ${Math.round(dpi.x)}×${Math.round(dpi.y)} DPI` : "")),
+        },
+          el("img", { class: "cell-img", src: url, alt: `${r.quality} ${row.key} DPI`, loading: "lazy" }),
+          el("div", { class: "cell-meta" },
+            dpi ? el("span", { class: "cell-dpi" },
+              `${Math.round(dpi.x)}×${Math.round(dpi.y)} DPI`) : null,
+            el("a", { class: "cell-download", href: url, download: "" }, "download"),
+          ),
+        );
+      }),
+    );
+    grid.append(rowEl);
+  }
+}
+
+function openUpscaleLightbox(url, caption) {
+  const dlg = $("#upscale-test-lightbox");
+  $("#upscale-test-lightbox-img").src = url;
+  $("#upscale-test-lightbox-caption").textContent = caption || "";
+  if (!dlg.open) dlg.showModal();
+}
+
+function closeUpscaleLightbox() {
+  const dlg = $("#upscale-test-lightbox");
+  if (dlg.open) dlg.close();
+}
+
 async function addCardsFromFiles(files) {
   if (!files || !files.length || !state.activeProject) return;
   try {
@@ -1670,6 +1896,12 @@ function loadMorePrintings() {
 }
 
 // --- Export (SSE) -----------------------------------------------------------
+function updateExportButtonLabel() {
+  const format = $("#export-format")?.value || "pdf";
+  const label = $("#btn-export .btn-label");
+  if (label) label.textContent = format === "png" ? "Export PNGs" : "Export PDF";
+}
+
 function runExport() {
   if (!state.activeProject) return;
   const btn = $("#btn-export");
@@ -1682,13 +1914,15 @@ function runExport() {
   // know the new file's path from the `done` event.
   $("#download-fronts").hidden = true;
   $("#download-backs").hidden = true;
+  clearPngDownloads();
 
   const backs = $("#backs-mode")?.value || "none";
   const upscale = $("#upscale-checkbox")?.checked ? "true" : "false";
   const quality = $("#quality-mode")?.value || "quality";
+  const format = $("#export-format")?.value || "pdf";
   const { x: offsetX, y: offsetY } = currentOffsets();
   const params = new URLSearchParams({
-    backs, upscale, quality,
+    backs, upscale, quality, format,
     back_offset_x: String(offsetX),
     back_offset_y: String(offsetY),
   });
@@ -1746,6 +1980,37 @@ function showDownload(sel, serverPath) {
 }
 
 
+function clearPngDownloads() {
+  for (const sel of ["#download-pngs-fronts", "#download-pngs-backs"]) {
+    const row = document.querySelector(sel);
+    if (!row) continue;
+    row.innerHTML = "";
+    row.hidden = true;
+  }
+}
+
+function renderPngDownloads(sel, serverPaths, labelPrefix) {
+  const row = document.querySelector(sel);
+  if (!row || !serverPaths?.length) return;
+  row.innerHTML = "";
+  const summary = document.createElement("span");
+  summary.className = "dim png-row-label";
+  summary.textContent = `${labelPrefix} (${serverPaths.length}):`;
+  row.append(summary);
+  serverPaths.forEach((p, i) => {
+    const url = "/" + p.replace(/^\/*/, "");
+    const filename = p.split("/").pop();
+    const a = document.createElement("a");
+    a.className = "download-btn tiny";
+    a.href = url;
+    a.setAttribute("download", filename);
+    a.title = filename;
+    a.textContent = `p${i + 1}`;
+    row.append(a);
+  });
+  row.hidden = false;
+}
+
 function handleExportEvent(evt, status) {
   const { event, data } = evt;
   if (event === "start") {
@@ -1755,14 +2020,20 @@ function handleExportEvent(evt, status) {
     status.textContent = `exporting ${data.total} cards${mode}…`;
   } else if (event === "progress") {
     if (data.phase === "render") status.textContent = "rendering PDF…";
+    else if (data.phase === "rasterise") status.textContent = "rasterising PNGs…";
     else if (data.phase === "upscale") status.textContent = `upscale ${data.index + 1}/${data.total}: ${data.name}`;
     else if (data.phase === "back") status.textContent = `back ${data.index + 1}/${data.total}: ${data.name}`;
     else status.textContent = `download ${data.index + 1}/${data.total}: ${data.name}`;
   } else if (event === "done") {
     status.className = "status ok";
     status.textContent = "done";
-    showDownload("#download-fronts", data.path);
-    if (data.backs_path) showDownload("#download-backs", data.backs_path);
+    if (data.format === "png") {
+      renderPngDownloads("#download-pngs-fronts", data.png_paths, "Fronts");
+      renderPngDownloads("#download-pngs-backs", data.backs_png_paths, "Backs");
+    } else {
+      showDownload("#download-fronts", data.path);
+      if (data.backs_path) showDownload("#download-backs", data.backs_path);
+    }
     toast("Export complete — click to download", "ok");
   } else if (event === "error") {
     status.className = "status err";
@@ -1807,6 +2078,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#filter-entries").addEventListener("input", (e) => { state.entryFilter = e.target.value; renderDeckGrid(); });
   $("#btn-load-more").addEventListener("click", loadMorePrintings);
   $("#btn-export").addEventListener("click", runExport);
+  $("#export-format")?.addEventListener("change", updateExportButtonLabel);
+  updateExportButtonLabel();
   $("#btn-new-project").addEventListener("click", openNewProjectForm);
   $("#btn-hero-new")?.addEventListener("click", openNewProjectForm);
   $("#brand-link")?.addEventListener("click", (ev) => {
@@ -1876,6 +2149,26 @@ window.addEventListener("DOMContentLoaded", async () => {
   refreshLibrary().catch(() => {});
   refreshBacks().catch(() => {});
   $("#nav-library")?.addEventListener("click", openLibraryModal);
+  $("#nav-upscale-test")?.addEventListener("click", openUpscaleTestModal);
+
+  // Upscale-test modal wiring
+  const upDlg = $("#upscale-test-modal");
+  $("#upscale-test-close")?.addEventListener("click", closeUpscaleTestModal);
+  upDlg?.addEventListener("click", (ev) => {
+    if (ev.target === upDlg) closeUpscaleTestModal();
+  });
+  $("#upscale-test-input")?.addEventListener("input", (ev) => {
+    scheduleUpscaleTestSearch(ev.target.value);
+  });
+  $("#upscale-test-again")?.addEventListener("click", () => {
+    upscaleTestState.runningId = null;
+    openUpscaleTestModal();
+  });
+  const upLb = $("#upscale-test-lightbox");
+  $("#upscale-test-lightbox-close")?.addEventListener("click", closeUpscaleLightbox);
+  upLb?.addEventListener("click", (ev) => {
+    if (ev.target === upLb) closeUpscaleLightbox();
+  });
   $("#nav-backs")?.addEventListener("click", openBacksModal);
 
   // Backs modal wiring

@@ -328,6 +328,41 @@ def render_registration_test(out_path: str | Path, *,
     return out_path
 
 
+def rasterise_pdf_to_pngs(pdf_path: str | Path, *,
+                           dpi: int = 300,
+                           suffix_width: int = 2) -> list[Path]:
+    """Rasterise every page of `pdf_path` into a sibling PNG.
+
+    Output: `{stem}_p01.png`, `{stem}_p02.png`, … next to the source PDF.
+    Returns the paths in page order. Overwrites existing files with the
+    same names — callers are expected to pass a timestamped stem so old
+    exports aren't clobbered.
+    """
+    import pypdfium2 as pdfium  # heavy import; keep it lazy
+
+    pdf_path = Path(pdf_path)
+    scale = dpi / 72.0  # 1 PDF canvas unit == 1/72 inch
+    out_paths: list[Path] = []
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    try:
+        for i in range(len(pdf)):
+            page = pdf.get_page(i)
+            try:
+                bitmap = page.render(scale=scale, rev_byteorder=True)
+                image = bitmap.to_pil()
+            finally:
+                page.close()
+            out = pdf_path.with_name(
+                f"{pdf_path.stem}_p{i + 1:0{suffix_width}d}.png"
+            )
+            # optimize=True quadruples encode time for a ~4% size win — skip it.
+            image.save(out, format="PNG")
+            out_paths.append(out)
+    finally:
+        pdf.close()
+    return out_paths
+
+
 def default_output_path(project_name: str, backs_mode: BacksMode,
                          output_dir: str | Path = "output",
                          *, timestamp: bool = True,

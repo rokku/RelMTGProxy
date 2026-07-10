@@ -5,6 +5,7 @@ Pillow==12.3.0
 fastapi==0.139.0
 uvicorn[standard]==0.49.0
 python-multipart==0.0.32  # multipart file uploads for the picker UI
+pypdfium2==5.11.0         # rasterise the export PDF into per-page PNGs
 
 # Dev
 pytest==8.3.3

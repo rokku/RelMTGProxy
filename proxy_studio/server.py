@@ -42,7 +42,7 @@ from . import upscale as UP
 from .layout import PageSpec
 from .pdf_export import (
     DEFAULT_CUT_COLOR, RenderCard, default_output_path, parse_hex_color,
-    render_pdf, render_registration_test,
+    rasterise_pdf_to_pngs, render_pdf, render_registration_test,
 )
 from .project import Entry, Project, SelectedPrint
 
@@ -620,6 +620,24 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
         project.save(state.projects_dir)
         return {"ok": True, "entry": _entry_view(entry, state, card=card)}
 
+    # --- Upscaler comparison test ------------------------------------------
+    @app.post("/api/upscale-test/stream")
+    def upscale_test_stream(scryfall_id: str) -> StreamingResponse:
+        """Stream a side-by-side upscaler comparison for one card.
+
+        Runs every model in `UP.MODELS` once at the model's native 4× scale,
+        saves the 1200 DPI result, then downsamples to 600 DPI with LANCZOS
+        and saves that too. Six PNGs total (3 models × 2 scales), streamed
+        as SSE progress + a final `done` event with URLs.
+        """
+        state: AppState = app.state.picker
+        if not scryfall_id.strip():
+            raise HTTPException(400, "scryfall_id is required")
+        return StreamingResponse(
+            _upscale_test_stream(state, scryfall_id.strip()),
+            media_type="text/event-stream",
+        )
+
     # --- Prints ------------------------------------------------------------
     @app.get("/api/prints/{oracle_id}")
     def get_prints(oracle_id: str) -> dict[str, Any]:
@@ -655,7 +673,9 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
                     backs: str = "none",
                     flip_edge: str = "long",
                     back_offset_x: float = 0.0,
-                    back_offset_y: float = 0.0) -> StreamingResponse:
+                    back_offset_y: float = 0.0,
+                    format: str = "pdf",
+                    png_dpi: int = 300) -> StreamingResponse:
         if cut_lines not in ("full", "ticks"):
             raise HTTPException(400, "cut_lines must be 'full' or 'ticks'")
         if backs not in ("none", "duplex", "separate"):
@@ -665,6 +685,10 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
         if quality not in UP.MODELS:
             raise HTTPException(400,
                 f"quality must be one of {list(UP.MODELS)}")
+        if format not in ("pdf", "png"):
+            raise HTTPException(400, "format must be 'pdf' or 'png'")
+        if not 72 <= png_dpi <= 600:
+            raise HTTPException(400, "png_dpi must be between 72 and 600")
         try:
             color = parse_hex_color(cut_color)
         except ValueError as e:
@@ -679,7 +703,9 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
                            quality=quality,
                            backs_mode=backs,
                            flip_edge=flip_edge,  # type: ignore[arg-type]
-                           back_offset=(back_offset_x, back_offset_y)),
+                           back_offset=(back_offset_x, back_offset_y),
+                           output_format=format,
+                           png_dpi=png_dpi),
             media_type="text/event-stream",
         )
 
@@ -1052,6 +1078,170 @@ def _upscale_kw(src, scryfall_id, face_index, quality):
     return UP.upscale_image(src, scryfall_id, face_index, quality=quality)
 
 
+UPSCALE_TEST_DIR = OUTPUT_DIR / "upscale-tests"
+
+
+def _upscale_native_4x(src: Path, out: Path, quality: str) -> Path:
+    """Run one model at its native 4× scale; PNG saved at `out`.
+
+    Same pipeline as the export path, minus the LANCZOS downsample — so
+    the caller can decide whether to keep the raw 4× or downsample.
+    """
+    upscaler = UP.select_upscaler("auto", quality=quality)
+    upscaler.upscale(src, out, scale=4)
+    return out
+
+
+def _downsample_to_2x(src_4x: Path, out: Path, src_orig: Path) -> Path:
+    """Take a 4× PNG and LANCZOS-downsample to 2× of the original size."""
+    from PIL import Image
+    with Image.open(src_orig) as orig:
+        target = (orig.width * 2, orig.height * 2)
+    with Image.open(src_4x) as im:
+        icc = im.info.get("icc_profile")
+        im = im.resize(target, Image.LANCZOS)
+        params: dict[str, object] = {"format": "PNG", "optimize": False}
+        if icc is not None:
+            params["icc_profile"] = icc
+        im.save(out, **params)
+    return out
+
+
+async def _upscale_test_stream(state: AppState,
+                                scryfall_id: str) -> AsyncIterator[bytes]:
+    """SSE generator for the single-card upscaler comparison test."""
+
+    def _sse(event: str, data: dict[str, Any]) -> bytes:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    # Fetch card metadata + download the front image.
+    try:
+        card = await asyncio.to_thread(
+            state.client._get_json, f"{SF.API_BASE}/cards/{scryfall_id}")
+    except SF.ScryfallError as e:
+        yield _sse("error", {"message": str(e)})
+        return
+    if card.get("__http_status") == 404:
+        yield _sse("error", {"message": f"Card {scryfall_id!r} not found"})
+        return
+
+    try:
+        front, _back = state.client.face_images_for(card)
+    except SF.ScryfallError as e:
+        yield _sse("error", {"message": str(e)})
+        return
+
+    yield _sse("start", {
+        "scryfall_id": scryfall_id,
+        "name": card.get("name", ""),
+        "set": card.get("set", ""),
+        "collector_number": card.get("collector_number", ""),
+        "models": list(UP.MODELS),
+    })
+
+    yield _sse("progress", {"phase": "download",
+                             "name": card.get("name", ""),
+                             "index": 0, "total": len(UP.MODELS)})
+    try:
+        src_path = await asyncio.to_thread(state.client.download_image, front)
+    except SF.ScryfallError as e:
+        yield _sse("error", {"message": f"download failed: {e}"})
+        return
+
+    out_dir = UPSCALE_TEST_DIR / scryfall_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    results: list[dict[str, Any]] = []
+    for idx, quality in enumerate(UP.MODELS):
+        model_spec = UP.MODELS[quality]
+        yield _sse("progress", {
+            "phase": "upscale",
+            "quality": quality,
+            "model": model_spec.ncnn_name,
+            "index": idx, "total": len(UP.MODELS),
+            "name": card.get("name", ""),
+        })
+        out_4x = out_dir / f"{quality}_1200dpi.png"
+        try:
+            task = asyncio.create_task(asyncio.to_thread(
+                _upscale_native_4x, src_path, out_4x, quality))
+            async for item in _run_with_heartbeats_task(task):
+                if isinstance(item, tuple) and item and item[0] == "__result__":
+                    pass
+                else:
+                    yield item
+        except UP.UpscalerNotAvailable as e:
+            results.append({
+                "quality": quality,
+                "model": model_spec.ncnn_name,
+                "description": model_spec.description,
+                "unavailable": str(e),
+                "url_1200": None, "url_600": None,
+                "dpi_1200": None, "dpi_600": None,
+            })
+            continue
+        except Exception as e:
+            log.exception("upscale-test: %s failed", quality)
+            results.append({
+                "quality": quality,
+                "model": model_spec.ncnn_name,
+                "description": model_spec.description,
+                "error": str(e),
+                "url_1200": None, "url_600": None,
+                "dpi_1200": None, "dpi_600": None,
+            })
+            continue
+
+        yield _sse("progress", {
+            "phase": "downsample",
+            "quality": quality,
+            "index": idx, "total": len(UP.MODELS),
+            "name": card.get("name", ""),
+        })
+        out_600 = out_dir / f"{quality}_600dpi.png"
+        try:
+            await asyncio.to_thread(
+                _downsample_to_2x, out_4x, out_600, src_path)
+        except Exception as e:
+            log.exception("upscale-test: downsample %s failed", quality)
+            results.append({
+                "quality": quality,
+                "model": model_spec.ncnn_name,
+                "description": model_spec.description,
+                "error": f"downsample failed: {e}",
+                "url_1200": f"/output/upscale-tests/{scryfall_id}/{out_4x.name}",
+                "url_600": None,
+                "dpi_1200": _effective_dpi(out_4x),
+                "dpi_600": None,
+            })
+            continue
+
+        results.append({
+            "quality": quality,
+            "model": model_spec.ncnn_name,
+            "description": model_spec.description,
+            "url_1200": f"/output/upscale-tests/{scryfall_id}/{out_4x.name}",
+            "url_600": f"/output/upscale-tests/{scryfall_id}/{out_600.name}",
+            "dpi_1200": _effective_dpi(out_4x),
+            "dpi_600": _effective_dpi(out_600),
+        })
+
+    yield _sse("done", {
+        "scryfall_id": scryfall_id,
+        "name": card.get("name", ""),
+        "results": results,
+        "source_url": f"/output/upscale-tests/{scryfall_id}/../../..",  # unused, informational
+    })
+
+
+def _effective_dpi(image_path: Path) -> dict[str, float]:
+    try:
+        dpi_x, dpi_y = UP.effective_dpi_of(image_path)
+    except Exception:
+        return {"x": 0.0, "y": 0.0}
+    return {"x": round(dpi_x, 1), "y": round(dpi_y, 1)}
+
+
 async def _export_stream(state: AppState, *, project_name: str,
                           spec: PageSpec,
                           cut_color: tuple[float, float, float],
@@ -1060,6 +1250,8 @@ async def _export_stream(state: AppState, *, project_name: str,
                           backs_mode: str = "none",
                           flip_edge: str = "long",
                           back_offset: tuple[float, float] = (0.0, 0.0),
+                          output_format: str = "pdf",
+                          png_dpi: int = 300,
                           ) -> AsyncIterator[bytes]:
     def _sse(event: str, data: dict[str, Any]) -> bytes:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
@@ -1288,8 +1480,37 @@ async def _export_stream(state: AppState, *, project_name: str,
                 fronts_path, backs_path = item[1]
             else:
                 yield item
-        yield _sse("done", {"path": str(fronts_path),
-                             "backs_path": str(backs_path) if backs_path else None})
+
+        if output_format == "png":
+            yield _sse("progress", {"index": total, "total": total,
+                                    "name": "", "phase": "rasterise"})
+
+            def _rasterise() -> tuple[list[Path], list[Path]]:
+                fronts_pngs = rasterise_pdf_to_pngs(fronts_path, dpi=png_dpi)  # type: ignore[arg-type]
+                backs_pngs = (
+                    rasterise_pdf_to_pngs(backs_path, dpi=png_dpi)  # type: ignore[arg-type]
+                    if backs_path else []
+                )
+                return fronts_pngs, backs_pngs
+
+            fronts_pngs, backs_pngs = [], []
+            async for item in _run_with_heartbeats(_rasterise):
+                if isinstance(item, tuple) and item and item[0] == "__result__":
+                    fronts_pngs, backs_pngs = item[1]
+                else:
+                    yield item
+            yield _sse("done", {
+                "format": "png",
+                "png_paths": [str(p) for p in fronts_pngs],
+                "backs_png_paths": [str(p) for p in backs_pngs],
+                # Handy for users who want the source too.
+                "path": str(fronts_path),
+                "backs_path": str(backs_path) if backs_path else None,
+            })
+        else:
+            yield _sse("done", {"format": "pdf",
+                                 "path": str(fronts_path),
+                                 "backs_path": str(backs_path) if backs_path else None})
 
     except Exception as e:
         log.exception("Export failed")

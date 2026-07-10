@@ -426,6 +426,84 @@ def cmd_upscale(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_upscale_test(args: argparse.Namespace) -> int:
+    """Run every registered upscaler on one card at both 1200 and 600 DPI.
+
+    Handy for eyeballing which model looks best on your printer before you
+    commit to a global default. Outputs land in `output/upscale-tests/<id>/`
+    named `<quality>_1200dpi.png` and `<quality>_600dpi.png`.
+    """
+    client = SF.ScryfallClient()
+    # Accept either a raw Scryfall id or a card name.
+    if _looks_like_scryfall_id(args.card):
+        card = client._get_json(f"{SF.API_BASE}/cards/{args.card}")
+        if card.get("__http_status") == 404:
+            print(f"error: card {args.card!r} not found", file=sys.stderr)
+            return 2
+    else:
+        try:
+            card = client.resolve_named(args.card)
+        except SF.NotFoundError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+
+    front, _back = client.face_images_for(card)
+    src = client.download_image(front)
+
+    from PIL import Image
+    out_dir = Path("output/upscale-tests") / card["id"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Card: {card.get('name')} ({card.get('set','?').upper()} "
+          f"{card.get('collector_number','?')})")
+    print(f"Source: {src}")
+    print(f"Output dir: {out_dir}")
+
+    for quality, spec in UP.MODELS.items():
+        print(f"\n[{quality}] {spec.description}")
+        try:
+            up = UP.select_upscaler(args.backend, quality=quality)
+        except UP.UpscalerNotAvailable as e:
+            print(f"  skipped — {e}")
+            continue
+        out_1200 = out_dir / f"{quality}_1200dpi.png"
+        print(f"  → {out_1200.name} (native 4×)")
+        try:
+            up.upscale(src, out_1200, scale=4)
+        except Exception as e:
+            print(f"  error: {e}", file=sys.stderr)
+            continue
+        dpi_x, dpi_y = UP.effective_dpi_of(out_1200)
+        print(f"    {out_1200.stat().st_size / 1024:.0f} KB, "
+              f"{dpi_x:.0f}×{dpi_y:.0f} DPI")
+
+        out_600 = out_dir / f"{quality}_600dpi.png"
+        print(f"  → {out_600.name} (downsample to 2×)")
+        with Image.open(src) as orig:
+            target = (orig.width * 2, orig.height * 2)
+        with Image.open(out_1200) as im:
+            icc = im.info.get("icc_profile")
+            im = im.resize(target, Image.LANCZOS)
+            params: dict[str, object] = {"format": "PNG", "optimize": False}
+            if icc is not None:
+                params["icc_profile"] = icc
+            im.save(out_600, **params)
+        dpi_x, dpi_y = UP.effective_dpi_of(out_600)
+        print(f"    {out_600.stat().st_size / 1024:.0f} KB, "
+              f"{dpi_x:.0f}×{dpi_y:.0f} DPI")
+
+    print(f"\nDone. Compare files under {out_dir}")
+    return 0
+
+
+def _looks_like_scryfall_id(s: str) -> bool:
+    # Scryfall ids are UUID-v4 lowercase-hex.
+    import re
+    return bool(re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        s.strip().lower()))
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     """Download images for every selected printing and render a fronts PDF.
 
@@ -708,6 +786,16 @@ def build_parser() -> argparse.ArgumentParser:
                       help="'quality' (default), 'fast', or 'ultramix' — "
                            "see `export --help`")
     p_up.set_defaults(func=cmd_upscale)
+
+    p_ut = sub.add_parser("upscale-test",
+                          help="Run every upscaler on a single card at 1200 "
+                               "and 600 DPI so you can compare outputs")
+    p_ut.add_argument("card",
+                      help="Card name (fuzzy) or Scryfall card id")
+    p_ut.add_argument("--backend", choices=["auto", "mps", "ncnn"],
+                      default="auto",
+                      help="Which upscaler backend to use (default: auto)")
+    p_ut.set_defaults(func=cmd_upscale_test)
 
     return p
 

@@ -14,50 +14,71 @@
   <div class="mana-stripe" aria-hidden="true"></div>
 
   <header class="topbar">
-    <div class="brand">
-      <a href="#" id="brand-link" class="brand-link" aria-label="RelMTG Proxy home">
-        <img class="brand-logo" src="/assets/relmtgproxy_logo.png"
-             alt="RelMTG Proxy — Colorful Magic Proxy Generator">
-      </a>
-      <span id="project-badge" class="project-badge" hidden></span>
-    </div>
-    <div class="actions">
-      <label id="upscale-toggle" class="chip" hidden title="Upscale every card to ~600 DPI before export">
-        <input type="checkbox" id="upscale-checkbox" checked>
-        <span>600 DPI upscale</span>
-      </label>
-      <label id="quality-picker" class="chip" hidden title="Trade quality against speed">
-        <span>Quality</span>
-        <select id="quality-mode">
-          <option value="quality">Best (x4plus)</option>
-          <option value="fast">Fast (x4plus-anime, ~4× faster)</option>
-          <option value="ultramix">Ultramix Balanced (Upscayl)</option>
-        </select>
-      </label>
-      <label id="backs-picker" class="chip" hidden>
-        <span>Backs</span>
-        <select id="backs-mode">
-          <option value="none">None</option>
-          <option value="duplex">Duplex (interleaved)</option>
-          <option value="separate">Separate file</option>
-        </select>
-      </label>
-      <div id="align-controls" class="chip align-chip" hidden title="If your printer misaligns fronts and backs, measure the drift with the alignment test and enter the offsets here (in mm).">
-        <span>Align</span>
-        <input id="back-offset-x" type="number" step="0.1" value="0" aria-label="Back offset X (mm)">
-        <span class="dim">×</span>
-        <input id="back-offset-y" type="number" step="0.1" value="0" aria-label="Back offset Y (mm)">
-        <button id="btn-align-test" class="ghost tiny-btn" type="button" title="Download a two-page duplex test PDF">
-          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>
-          Test
-        </button>
+    <div class="topbar-main">
+      <div class="brand">
+        <a href="#" id="brand-link" class="brand-link" aria-label="RelMTG Proxy home">
+          <img class="brand-logo" src="/assets/relmtgproxy_logo.png"
+               alt="RelMTG Proxy — Colorful Magic Proxy Generator">
+        </a>
+        <span id="project-badge" class="project-badge" hidden></span>
       </div>
-      <button id="btn-export" class="primary" hidden>
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 3v12"/><path d="m6 9 6-6 6 6"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>
-        </svg>
-        Export PDF
-      </button>
+      <div class="actions">
+        <!-- Group 1: upscaling -->
+        <div class="chip-group" id="upscale-group" hidden>
+          <label id="upscale-toggle" class="chip" title="Upscale every card to ~600 DPI before export">
+            <input type="checkbox" id="upscale-checkbox" checked>
+            <span>600 DPI upscale</span>
+          </label>
+          <label id="quality-picker" class="chip" title="Trade quality against speed">
+            <span>Quality</span>
+            <select id="quality-mode">
+              <option value="quality">Best (x4plus)</option>
+              <option value="fast">Fast (x4plus-anime, ~4× faster)</option>
+              <option value="ultramix">Ultramix Balanced (Upscayl)</option>
+            </select>
+          </label>
+        </div>
+        <!-- Group 2: back faces -->
+        <div class="chip-group" id="backs-group" hidden>
+          <label id="backs-picker" class="chip">
+            <span>Backs</span>
+            <select id="backs-mode">
+              <option value="none">None</option>
+              <option value="duplex">Duplex (interleaved)</option>
+              <option value="separate">Separate file</option>
+            </select>
+          </label>
+          <div id="align-controls" class="chip align-chip" title="If your printer misaligns fronts and backs, measure the drift with the alignment test and enter the offsets here (in mm).">
+            <span>Align</span>
+            <input id="back-offset-x" type="number" step="0.1" value="0" aria-label="Back offset X (mm)">
+            <span class="dim">×</span>
+            <input id="back-offset-y" type="number" step="0.1" value="0" aria-label="Back offset Y (mm)">
+            <button id="btn-align-test" class="ghost tiny-btn" type="button" title="Download a two-page duplex test PDF">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>
+              Test
+            </button>
+          </div>
+        </div>
+        <!-- Group 3: output + trigger -->
+        <div class="chip-group export-group" id="export-group" hidden>
+          <label id="format-picker" class="chip" title="PDF is print-ready; PNGs give you one high-res image per page (300 DPI) for editing or sharing.">
+            <span>Format</span>
+            <select id="export-format">
+              <option value="pdf">PDF</option>
+              <option value="png">PNGs (300 DPI)</option>
+            </select>
+          </label>
+          <button id="btn-export" class="primary">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v12"/><path d="m6 9 6-6 6 6"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>
+            </svg>
+            <span class="btn-label">Export PDF</span>
+          </button>
+          <span id="export-status" class="status"></span>
+        </div>
+      </div>
+    </div>
+    <div class="topbar-downloads" id="downloads-bar">
       <a id="download-fronts" class="download-btn" href="" download hidden>
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 15V3"/><path d="m6 9 6 6 6-6"/><path d="M4 21h16"/>
@@ -70,7 +91,8 @@
         </svg>
         <span class="dl-name"></span>
       </a>
-      <span id="export-status" class="status"></span>
+      <div id="download-pngs-fronts" class="png-download-row" hidden></div>
+      <div id="download-pngs-backs" class="png-download-row" hidden></div>
     </div>
   </header>
 
@@ -94,6 +116,16 @@
           </svg>
           <span class="nav-label">Backs</span>
           <span id="nav-backs-count" class="nav-count" hidden>0</span>
+        </button>
+        <button id="nav-upscale-test" class="rail-nav-item" type="button" title="Compare upscalers side-by-side on a single card">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 4h6v6H4z"/>
+            <path d="M14 4h6v6h-6z"/>
+            <path d="M4 14h6v6H4z"/>
+            <path d="M14 14h6v6h-6z"/>
+            <path d="m17 17 3 3"/>
+          </svg>
+          <span class="nav-label">Upscale test</span>
         </button>
       </nav>
       <div class="rail-header rail-header-row">
@@ -373,6 +405,61 @@
         <p class="dim">Close this and use <strong>Add art → Upload new files</strong> to seed it.</p>
       </div>
     </div>
+  </dialog>
+
+  <!-- Upscaler comparison test (modal) -->
+  <dialog id="upscale-test-modal" class="picker-modal upscale-test-modal">
+    <div class="picker-modal-header">
+      <div class="picker-title-block">
+        <h2>Upscale test</h2>
+        <p class="dim">Pick a card and we'll run every upscaler at 600 DPI and 1200 DPI so you can compare on your own printer.</p>
+      </div>
+      <button id="upscale-test-close" class="ghost icon-button" type="button" title="Close (Esc)">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="upscale-test-body" class="upscale-test-body">
+      <!-- Step 1: search for a card -->
+      <div id="upscale-test-search" class="upscale-test-step">
+        <div class="search-input" style="max-width:420px">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="upscale-test-input" type="search" placeholder="Search Scryfall for a card…" autocomplete="off">
+        </div>
+        <div id="upscale-test-hint" class="dim" style="font-size:12px;margin-top:8px">Click a card in the results to run the test.</div>
+        <div id="upscale-test-results" class="printings-grid" style="margin-top:16px"></div>
+      </div>
+      <!-- Step 2: running -->
+      <div id="upscale-test-running" class="upscale-test-step" hidden>
+        <div class="upscale-test-running-card">
+          <img id="upscale-test-thumb" alt="">
+          <div>
+            <h3 id="upscale-test-name"></h3>
+            <p id="upscale-test-status" class="dim">Starting…</p>
+            <div class="progress-bar-track" aria-hidden="true"><div id="upscale-test-bar" class="progress-bar-fill" style="width:0"></div></div>
+          </div>
+        </div>
+      </div>
+      <!-- Step 3: results -->
+      <div id="upscale-test-done" class="upscale-test-step" hidden>
+        <div class="upscale-test-done-header">
+          <div>
+            <h3 id="upscale-test-done-name"></h3>
+            <p class="dim" id="upscale-test-done-sub"></p>
+          </div>
+          <button id="upscale-test-again" class="ghost" type="button">Test another card</button>
+        </div>
+        <div id="upscale-test-grid" class="upscale-test-grid"></div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Full-size preview lightbox for upscale-test outputs -->
+  <dialog id="upscale-test-lightbox" class="upscale-test-lightbox">
+    <button id="upscale-test-lightbox-close" class="ghost icon-button" type="button" title="Close">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
+    </button>
+    <img id="upscale-test-lightbox-img" alt="">
+    <div id="upscale-test-lightbox-caption" class="upscale-test-lightbox-caption"></div>
   </dialog>
 
   <!-- Backs library (modal) -->
