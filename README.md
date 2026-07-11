@@ -8,6 +8,19 @@ pick the art you like, hit export, print, cut, play.
 
 Runs on **macOS, Windows, and Linux**.
 
+> **About this project.** RelMTG Proxy is written with
+> [Claude Code](https://claude.com/product/claude-code) as an AI pair
+> programmer. I want to name that upfront — but it's not a "vibe-coded"
+> one-shot: I've been a working developer for 30 years, and what started
+> as rapid prototyping turned into ongoing development because Claude
+> Code turned out to be genuinely useful for it. Every change is
+> reviewed, the test suite is 235 tests and growing, and I use the app
+> for my own commander decks — which is how most rough edges get found.
+>
+> If AI-assisted code is a hard no for you, that's fair —
+> [proxxied.com](https://proxxied.com) is a great tool that predates
+> this project and does most of the same job.
+
 > **Cross-platform status (as of 2026-07):** the code is written to be
 > portable and the test suite (235 tests) runs green on macOS, but the
 > maintainer has only used it on Apple Silicon in anger. Windows and
