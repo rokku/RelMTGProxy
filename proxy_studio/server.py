@@ -34,6 +34,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import archidekt as AK
 from . import backs as BK
 from . import decklist as DL
 from . import moxfield as MX
@@ -41,8 +42,10 @@ from . import scryfall as SF
 from . import upscale as UP
 from .layout import PageSpec
 from .pdf_export import (
-    DEFAULT_CUT_COLOR, RenderCard, default_output_path, parse_hex_color,
-    rasterise_pdf_to_pngs, render_pdf, render_registration_test,
+    DEFAULT_CUT_COLOR, RenderCard, default_output_path,
+    extract_pdf_page_bytes, parse_hex_color,
+    pdf_page_count, rasterise_pdf_to_pngs, render_pdf,
+    render_pdf_page_to_png_bytes, render_registration_test,
 )
 from .project import Entry, Project, SelectedPrint
 
@@ -202,7 +205,7 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
         """SSE-streaming project creation.
 
         Emits events so the UI can render a real progress bar:
-          - `phase`     — {phase: "moxfield-fetch" | "resolving"}
+          - `phase`     — {phase: "moxfield-fetch" | "archidekt-fetch" | "resolving"}
           - `start`     — {total, name}
           - `progress`  — {index, total, name}
           - `card`      — {index, name, status, message?}
@@ -692,7 +695,9 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
                     back_offset_x: float = 0.0,
                     back_offset_y: float = 0.0,
                     format: str = "pdf",
-                    png_dpi: int = 300) -> StreamingResponse:
+                    png_dpi: int = 300,
+                    paper: str = "A4",
+                    dpi_target: int = 600) -> StreamingResponse:
         if cut_lines not in ("full", "ticks"):
             raise HTTPException(400, "cut_lines must be 'full' or 'ticks'")
         if backs not in ("none", "duplex", "separate"):
@@ -704,15 +709,21 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
                 f"quality must be one of {list(UP.MODELS)}")
         if format not in ("pdf", "png"):
             raise HTTPException(400, "format must be 'pdf' or 'png'")
-        if not 72 <= png_dpi <= 600:
-            raise HTTPException(400, "png_dpi must be between 72 and 600")
+        if not 72 <= png_dpi <= 1200:
+            raise HTTPException(400, "png_dpi must be between 72 and 1200")
+        if dpi_target not in (600, 1200):
+            raise HTTPException(400, "dpi_target must be 600 or 1200")
+        from .layout import PAPERS_MM
+        if paper not in PAPERS_MM:
+            raise HTTPException(400,
+                f"paper must be one of {list(PAPERS_MM)}")
         try:
             color = parse_hex_color(cut_color)
         except ValueError as e:
             raise HTTPException(400, f"cut_color: {e}") from e
         state: AppState = app.state.picker
         project_name = _validate_name(name)
-        spec = PageSpec(gutter_mm=gutter, cut_line_mode=cut_lines)  # type: ignore[arg-type]
+        spec = PageSpec(paper=paper, gutter_mm=gutter, cut_line_mode=cut_lines)  # type: ignore[arg-type]
         want_upscale = UP.any_backend_installed() if upscale is None else upscale
         return StreamingResponse(
             _export_stream(state, project_name=project_name, spec=spec,
@@ -722,12 +733,162 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
                            flip_edge=flip_edge,  # type: ignore[arg-type]
                            back_offset=(back_offset_x, back_offset_y),
                            output_format=format,
-                           png_dpi=png_dpi),
+                           png_dpi=png_dpi,
+                           dpi_target=dpi_target),
             media_type="text/event-stream",
         )
 
+    # --- Post-export preview + per-page download ---------------------------
+    @app.get("/api/pdf-preview")
+    def pdf_preview(path: str, page: int = 1, dpi: int = 90) -> "Response":
+        """Rasterise one page of a produced PDF to a PNG.
+
+        `path` must resolve inside `output/` — no arbitrary filesystem
+        access. `dpi` is capped at 200 to keep preview payloads small.
+        """
+        from fastapi import Response
+        if not 40 <= dpi <= 200:
+            raise HTTPException(400, "dpi must be between 40 and 200")
+        pdf_path = _resolve_output_path(path)
+        try:
+            data = render_pdf_page_to_png_bytes(pdf_path, page - 1, dpi=dpi)
+        except IndexError as e:
+            raise HTTPException(404, str(e)) from e
+        # Preview PNGs are safe to cache aggressively — the source PDF's
+        # filename is timestamped, so a URL uniquely identifies its content.
+        return Response(
+            content=data, media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
+        )
+
+    @app.get("/api/pdf-page")
+    def pdf_page_download(path: str, page: int = 1) -> "Response":
+        """Return a single-page PDF split from a produced export.
+
+        Useful for "reprint just page 3 after a paper jam" — extracts the
+        chosen page in-memory and streams it as a download, no server-side
+        artefacts left behind.
+        """
+        from fastapi import Response
+        pdf_path = _resolve_output_path(path)
+        try:
+            data = extract_pdf_page_bytes(pdf_path, page - 1)
+        except IndexError as e:
+            raise HTTPException(404, str(e)) from e
+        stem = pdf_path.stem
+        filename = f"{stem}_p{page:02d}.pdf"
+        return Response(
+            content=data, media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "public, max-age=3600",
+            },
+        )
+
+    # --- Upscaler model manager -------------------------------------------
+    @app.get("/api/upscaler/status")
+    def upscaler_status() -> dict[str, Any]:
+        """Report install state for every model, per backend.
+
+        Community models (Ultramix) only have an ncnn entry; base-bundle
+        models (x4plus, x4plus-anime) can't be installed piecemeal — the
+        `installable` flag is False for those.
+        """
+        models = []
+        for name, spec in UP.MODELS.items():
+            ncnn_installed = UP.ncnn_model_installed(quality=name)
+            mps_installed = UP.mps_weights_installed(quality=name)
+            models.append({
+                "quality": name,
+                "ncnn_name": spec.ncnn_name,
+                "description": spec.description,
+                "ncnn": {
+                    "installed": ncnn_installed,
+                    "installable": bool(spec.ncnn_bin_url),
+                    "size_url": spec.ncnn_bin_url,
+                },
+                "mps": {
+                    "installed": mps_installed,
+                    "installable": bool(spec.mps_weights_url),
+                },
+            })
+        return {
+            "models": models,
+            "ncnn_binary_installed": UP.is_binary_installed(),
+            "torch_mps_available": UP.torch_mps_available(),
+        }
+
+    @app.post("/api/upscaler/install/{quality}")
+    def upscaler_install(quality: str, backend: str = "ncnn") -> dict[str, Any]:
+        """Download the model files for `quality` on the given backend.
+
+        Runs synchronously — the ncnn `.bin` files are small (~65 MB) and
+        the MPS `.pth` files ~65 MB, so a plain POST is simpler than SSE.
+        The user's browser shows its own spinner.
+        """
+        if quality not in UP.MODELS:
+            raise HTTPException(404, f"unknown quality {quality!r}")
+        if backend not in ("ncnn", "mps"):
+            raise HTTPException(400, "backend must be 'ncnn' or 'mps'")
+        try:
+            if backend == "ncnn":
+                if not UP.is_binary_installed():
+                    raise HTTPException(400,
+                        "ncnn base binary not installed. Run "
+                        "`python cli.py setup-upscaler` first.")
+                bin_path, _ = UP.download_ncnn_model(quality)
+                return {"ok": True, "backend": "ncnn",
+                        "installed_at": str(bin_path.parent)}
+            weights = UP.download_mps_weights(quality)
+            return {"ok": True, "backend": "mps",
+                    "installed_at": str(weights)}
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except Exception as e:
+            log.exception("upscaler install failed")
+            raise HTTPException(500, f"install failed: {e}") from e
+
+    @app.delete("/api/upscaler/install/{quality}", status_code=200)
+    def upscaler_uninstall(quality: str, backend: str = "ncnn") -> dict[str, Any]:
+        if quality not in UP.MODELS:
+            raise HTTPException(404, f"unknown quality {quality!r}")
+        if backend not in ("ncnn", "mps"):
+            raise HTTPException(400, "backend must be 'ncnn' or 'mps'")
+        try:
+            if backend == "ncnn":
+                removed = UP.uninstall_ncnn_model(quality)
+                return {"ok": True, "removed": [str(p) for p in removed]}
+            removed_path = UP.uninstall_mps_weights(quality)
+            return {"ok": True,
+                    "removed": [str(removed_path)] if removed_path else []}
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
 
 # --- Helpers ----------------------------------------------------------------
+
+def _resolve_output_path(rel_path: str) -> Path:
+    """Resolve `rel_path` under `output/`, rejecting anything that escapes it.
+
+    Accepts both `foo.pdf` and `output/foo.pdf` (the export `done` event returns
+    the latter, so this keeps client code trivial).
+    """
+    if not rel_path:
+        raise HTTPException(400, "path is required")
+    root = OUTPUT_DIR.resolve()
+    cleaned = rel_path.lstrip("/")
+    if cleaned.startswith("output/"):
+        cleaned = cleaned[len("output/"):]
+    candidate = (root / cleaned).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as e:
+        raise HTTPException(400, "path must be under output/") from e
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(404, f"file not found: {rel_path}")
+    if candidate.suffix.lower() != ".pdf":
+        raise HTTPException(400, "path must point to a PDF")
+    return candidate
 
 async def _save_uploads_to_library(files: "list[UploadFile]") -> list[dict[str, Any]]:
     """Write each uploaded image to the shared library dir.
@@ -774,7 +935,14 @@ def _prepare_new_project(state: "AppState",
     """
     decklist_stripped = (req.decklist or "").strip()
     entries: list[DL.DeckEntry] = []
-    if MX.looks_like_moxfield(decklist_stripped):
+    # Archidekt first — see cli.py for the reason (bare numeric IDs).
+    if AK.looks_like_archidekt(decklist_stripped):
+        try:
+            ak_name, entries = AK.fetch_deck(decklist_stripped)
+        except AK.ArchidektError as e:
+            raise HTTPException(400, f"Archidekt import failed: {e}") from e
+        raw_name = (req.name or "").strip() or AK.sanitize_project_name(ak_name)
+    elif MX.looks_like_moxfield(decklist_stripped):
         try:
             mox_name, entries = MX.fetch_deck(decklist_stripped)
         except MX.MoxfieldError as e:
@@ -838,7 +1006,16 @@ async def _create_stream(state: "AppState",
 
     # --- Parse input + validate project name (fast, sync). --------------
     decklist_stripped = (req.decklist or "").strip()
-    if MX.looks_like_moxfield(decklist_stripped):
+    if AK.looks_like_archidekt(decklist_stripped):
+        yield _sse("phase", {"phase": "archidekt-fetch"})
+        try:
+            ak_name, entries = await asyncio.to_thread(
+                AK.fetch_deck, decklist_stripped)
+        except AK.ArchidektError as e:
+            yield _sse("error", {"message": f"Archidekt import failed: {e}"})
+            return
+        raw_name = (req.name or "").strip() or AK.sanitize_project_name(ak_name)
+    elif MX.looks_like_moxfield(decklist_stripped):
         yield _sse("phase", {"phase": "moxfield-fetch"})
         try:
             mox_name, entries = await asyncio.to_thread(
@@ -1054,9 +1231,10 @@ def _dpi_gate_kw(image_path, label):
     return UP.check_dpi_gate(image_path, label=label)
 
 
-def _resolve_back(entry, client, upscaler, library_filename=None):
+def _resolve_back(entry, client, upscaler, library_filename=None, scale=2):
     return BK.resolve_back_image(
         entry, client=client, upscaler=upscaler,
+        scale=scale,
         library_filename=library_filename,
         library_dir=BACKS_ROOT,
     )
@@ -1089,10 +1267,11 @@ async def _run_with_heartbeats_task(task: "asyncio.Task"):
     yield ("__result__", task.result())
 
 
-def _upscale_kw(src, scryfall_id, face_index, quality):
+def _upscale_kw(src, scryfall_id, face_index, quality, scale):
     """`asyncio.to_thread` only forwards positional args, so wrap the
-    upscale call so we can thread the `quality` kwarg through."""
-    return UP.upscale_image(src, scryfall_id, face_index, quality=quality)
+    upscale call so we can thread the `quality`/`scale` kwargs through."""
+    return UP.upscale_image(src, scryfall_id, face_index,
+                            quality=quality, scale=scale)
 
 
 UPSCALE_TEST_DIR = OUTPUT_DIR / "upscale-tests"
@@ -1269,9 +1448,19 @@ async def _export_stream(state: AppState, *, project_name: str,
                           back_offset: tuple[float, float] = (0.0, 0.0),
                           output_format: str = "pdf",
                           png_dpi: int = 300,
+                          dpi_target: int = 600,
                           ) -> AsyncIterator[bytes]:
     def _sse(event: str, data: dict[str, Any]) -> bytes:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    # 600 DPI is scale=2 (native 4× downsampled); 1200 DPI keeps the raw
+    # 4× output. Cache keys already include scale, so the two targets don't
+    # collide.
+    upscale_scale = 4 if dpi_target >= 1200 else 2
+    # Below this per-axis DPI, an image would look under-rendered relative to
+    # the requested target and should be upscaled. ~90 % of target keeps a
+    # small headroom for images that are just under nominal size.
+    upscale_min_dpi = dpi_target * 0.9
 
     upscaler: UP.UpscaleBackend | None = None
     if upscale_on:
@@ -1296,7 +1485,8 @@ async def _export_stream(state: AppState, *, project_name: str,
     try:
         total = len(project.entries)
         yield _sse("start", {"total": total, "project": project.name,
-                             "upscale": upscale_on, "quality": quality})
+                             "upscale": upscale_on, "quality": quality,
+                             "dpi_target": dpi_target})
 
         # --- Download pipeline setup -----------------------------------------
         # Prefetching the next card's download while we upscale the current
@@ -1342,13 +1532,16 @@ async def _export_stream(state: AppState, *, project_name: str,
                     return
 
                 image_path = custom_path
-                if upscaler is not None and UP.needs_upscale(custom_path):
+                if upscaler is not None and UP.needs_upscale(
+                    custom_path, min_dpi=upscale_min_dpi,
+                ):
                     yield _sse("progress", {"index": idx, "total": total,
                                             "name": entry.name, "phase": "upscale"})
                     cache_key = f"custom-{project_name}-{custom_path.stem}"
                     try:
                         async for item in _run_with_heartbeats(
                             _upscale_kw, custom_path, cache_key, 0, quality,
+                            upscale_scale,
                         ):
                             if isinstance(item, tuple) and item and item[0] == "__result__":
                                 image_path = item[1]
@@ -1375,7 +1568,7 @@ async def _export_stream(state: AppState, *, project_name: str,
                     try:
                         custom_back = await asyncio.to_thread(
                             _resolve_back, entry, state.client, upscaler,
-                            project.default_back_filename)
+                            project.default_back_filename, upscale_scale)
                     except BK.BackResolutionError as e:
                         yield _sse("error", {"index": idx, "name": entry.name,
                                               "message": str(e)})
@@ -1421,7 +1614,7 @@ async def _export_stream(state: AppState, *, project_name: str,
                 try:
                     async for item in _run_with_heartbeats(
                         _upscale_kw, src_path, front.scryfall_id,
-                        front.face_index, quality,
+                        front.face_index, quality, upscale_scale,
                     ):
                         if isinstance(item, tuple) and item and item[0] == "__result__":
                             image_path = item[1]
@@ -1452,7 +1645,7 @@ async def _export_stream(state: AppState, *, project_name: str,
                 try:
                     async for item in _run_with_heartbeats(
                         _resolve_back, entry, state.client, upscaler,
-                        project.default_back_filename,
+                        project.default_back_filename, upscale_scale,
                     ):
                         if isinstance(item, tuple) and item and item[0] == "__result__":
                             back_path = item[1]
@@ -1523,11 +1716,18 @@ async def _export_stream(state: AppState, *, project_name: str,
                 # Handy for users who want the source too.
                 "path": str(fronts_path),
                 "backs_path": str(backs_path) if backs_path else None,
+                "page_count": len(fronts_pngs),
+                "backs_page_count": len(backs_pngs),
             })
         else:
+            page_count = pdf_page_count(fronts_path) if fronts_path else 0
+            backs_page_count = (pdf_page_count(backs_path)
+                                if backs_path else 0)
             yield _sse("done", {"format": "pdf",
                                  "path": str(fronts_path),
-                                 "backs_path": str(backs_path) if backs_path else None})
+                                 "backs_path": str(backs_path) if backs_path else None,
+                                 "page_count": page_count,
+                                 "backs_page_count": backs_page_count})
 
     except Exception as e:
         log.exception("Export failed")

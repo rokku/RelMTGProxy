@@ -470,6 +470,110 @@ def ncnn_model_installed(vendor_dir: Path = DEFAULT_VENDOR_DIR,
     return bin_ok and param_ok
 
 
+def ncnn_model_files(vendor_dir: Path,
+                     quality: QualityName) -> tuple[Path, Path] | None:
+    """Return `(bin_path, param_path)` for a quality, or None if base-bundle."""
+    spec = MODELS.get(quality)
+    if spec is None:
+        return None
+    binary_dir = Path(vendor_dir) / "models"
+    return (binary_dir / f"{spec.ncnn_name}.bin",
+            binary_dir / f"{spec.ncnn_name}.param")
+
+
+def download_ncnn_model(quality: QualityName, *,
+                        vendor_dir: Path = DEFAULT_VENDOR_DIR,
+                        force: bool = False) -> tuple[Path, Path]:
+    """Download the community-model ncnn files for `quality`.
+
+    Base-bundle models (x4plus, x4plus-anime) live inside the main
+    setup-upscaler zip and can't be installed piecemeal — raises
+    `ValueError` for those. Returns `(bin_path, param_path)` on success.
+    """
+    import urllib.request
+    spec = MODELS.get(quality)
+    if spec is None:
+        raise ValueError(f"unknown quality {quality!r}")
+    if not spec.ncnn_bin_url or not spec.ncnn_param_url:
+        raise ValueError(
+            f"{quality!r} is a base-bundle model; install with "
+            "`python cli.py setup-upscaler`"
+        )
+    models_dir = Path(vendor_dir) / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    bin_target = models_dir / f"{spec.ncnn_name}.bin"
+    param_target = models_dir / f"{spec.ncnn_name}.param"
+    if not force and bin_target.exists() and param_target.exists():
+        return bin_target, param_target
+    for url, target in ((spec.ncnn_bin_url, bin_target),
+                         (spec.ncnn_param_url, param_target)):
+        with urllib.request.urlopen(url, timeout=180) as resp:
+            data = resp.read()
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(target)
+    return bin_target, param_target
+
+
+def download_mps_weights(quality: QualityName, *,
+                          vendor_dir: Path = MPS_VENDOR_DIR,
+                          force: bool = False) -> Path:
+    """Download the PyTorch `.pth` weights for `quality`.
+
+    Raises `ValueError` for models that don't ship MPS weights (Ultramix).
+    Returns the on-disk path.
+    """
+    import urllib.request
+    spec = MODELS.get(quality)
+    if spec is None:
+        raise ValueError(f"unknown quality {quality!r}")
+    if not spec.mps_weights_url or not spec.mps_weights_filename:
+        raise ValueError(f"{quality!r} has no MPS weights available")
+    Path(vendor_dir).mkdir(parents=True, exist_ok=True)
+    target = Path(vendor_dir) / spec.mps_weights_filename
+    if target.exists() and not force:
+        return target
+    with urllib.request.urlopen(spec.mps_weights_url, timeout=180) as resp:
+        data = resp.read()
+    tmp = target.with_suffix(".pth.tmp")
+    tmp.write_bytes(data)
+    tmp.replace(target)
+    return target
+
+
+def uninstall_ncnn_model(quality: QualityName, *,
+                          vendor_dir: Path = DEFAULT_VENDOR_DIR) -> list[Path]:
+    """Delete the ncnn `.bin` + `.param` files for `quality`.
+
+    Returns the paths that were removed. Base-bundle models can be removed
+    this way too — running `setup-upscaler` will restore them.
+    """
+    files = ncnn_model_files(vendor_dir, quality)
+    if files is None:
+        raise ValueError(f"unknown quality {quality!r}")
+    removed: list[Path] = []
+    for p in files:
+        if p.exists():
+            p.unlink()
+            removed.append(p)
+    return removed
+
+
+def uninstall_mps_weights(quality: QualityName, *,
+                           vendor_dir: Path = MPS_VENDOR_DIR) -> Path | None:
+    """Delete the `.pth` weights for `quality`; returns the removed path."""
+    spec = MODELS.get(quality)
+    if spec is None:
+        raise ValueError(f"unknown quality {quality!r}")
+    if not spec.mps_weights_filename:
+        return None
+    target = Path(vendor_dir) / spec.mps_weights_filename
+    if target.exists():
+        target.unlink()
+        return target
+    return None
+
+
 def torch_mps_available() -> bool:
     """True if `torch` importable AND MPS is functional on this machine."""
     try:

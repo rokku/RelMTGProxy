@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from proxy_studio import archidekt as AK
 from proxy_studio import backs as BK
 from proxy_studio import decklist as DL
 from proxy_studio import moxfield as MX
@@ -31,12 +32,13 @@ def _configure_logging(verbose: bool) -> None:
 # --- Sub-commands -----------------------------------------------------------
 
 def cmd_new(args: argparse.Namespace) -> int:
-    """Create a project JSON from a decklist file or Moxfield URL.
+    """Create a project JSON from a decklist file or online deck URL.
 
     Accepts:
       - a path to a plain-text decklist file
       - a Moxfield URL like https://www.moxfield.com/decks/{id}
-      - a bare Moxfield deck ID
+      - an Archidekt URL like https://archidekt.com/decks/{id}[/slug]
+      - a bare Moxfield deck ID or numeric Archidekt deck ID
 
     Resolves each entry to Scryfall's canonical card. If the decklist pinned a
     (set, cn), that exact printing is used; otherwise a sensible default is
@@ -45,7 +47,19 @@ def cmd_new(args: argparse.Namespace) -> int:
     """
     source = args.decklist
 
-    if MX.looks_like_moxfield(source):
+    # Archidekt is checked first so that a bare numeric deck ID (which also
+    # fits Moxfield's NanoID shape at ≥10 chars) is routed to Archidekt; the
+    # two URL patterns are disjoint so URLs aren't affected by the order.
+    if AK.looks_like_archidekt(source):
+        print(f"Importing from Archidekt: {source}")
+        try:
+            ak_name, entries = AK.fetch_deck(source)
+        except AK.ArchidektError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        project_name = args.name or AK.sanitize_project_name(ak_name)
+        print(f"Fetched {len(entries)} unique cards ({ak_name!r}).")
+    elif MX.looks_like_moxfield(source):
         print(f"Importing from Moxfield: {source}")
         try:
             mox_name, entries = MX.fetch_deck(source)

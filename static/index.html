@@ -25,9 +25,9 @@
       <div class="actions">
         <!-- Group 1: upscaling -->
         <div class="chip-group" id="upscale-group" hidden>
-          <label id="upscale-toggle" class="chip" title="Upscale every card to ~600 DPI before export">
+          <label id="upscale-toggle" class="chip" title="Upscale every card to the chosen print resolution before export">
             <input type="checkbox" id="upscale-checkbox" checked>
-            <span>600 DPI upscale</span>
+            <span id="upscale-label">Upscale</span>
           </label>
           <label id="quality-picker" class="chip" title="Trade quality against speed">
             <span>Quality</span>
@@ -35,6 +35,13 @@
               <option value="quality">Best (x4plus)</option>
               <option value="fast">Fast (x4plus-anime, ~4× faster)</option>
               <option value="ultramix">Ultramix Balanced (Upscayl)</option>
+            </select>
+          </label>
+          <label id="dpi-picker" class="chip" title="Print resolution. 600 DPI is enough for any consumer inkjet or laser printer. 1200 DPI (raw 4× output, no downsample) is only worth it on high-end photo printers — files will be ~4× larger.">
+            <span>Resolution</span>
+            <select id="dpi-target">
+              <option value="600">600 DPI</option>
+              <option value="1200">1200 DPI (high-end printers)</option>
             </select>
           </label>
         </div>
@@ -61,6 +68,13 @@
         </div>
         <!-- Group 3: output + trigger -->
         <div class="chip-group export-group" id="export-group" hidden>
+          <label id="paper-picker" class="chip" title="Page size for the exported PDF. Letter is shorter than A4, so a 3×3 grid at the default 3 mm gutter leaves only ~4.7 mm top/bottom margin — most printers will clip if you don't reduce the gutter or scale to fit.">
+            <span>Paper</span>
+            <select id="paper-size">
+              <option value="A4">A4</option>
+              <option value="Letter">US Letter</option>
+            </select>
+          </label>
           <label id="format-picker" class="chip" title="PDF is print-ready; PNGs give you one high-res image per page (300 DPI) for editing or sharing.">
             <span>Format</span>
             <select id="export-format">
@@ -93,8 +107,24 @@
       </a>
       <div id="download-pngs-fronts" class="png-download-row" hidden></div>
       <div id="download-pngs-backs" class="png-download-row" hidden></div>
+      <div id="pdf-preview" class="pdf-preview" hidden>
+        <div class="pdf-preview-label">
+          <span class="pdf-preview-title">Preview</span>
+          <span id="pdf-preview-hint" class="dim"></span>
+        </div>
+        <div id="pdf-preview-strip" class="pdf-preview-strip"></div>
+      </div>
     </div>
   </header>
+
+  <!-- Preview lightbox -->
+  <dialog id="pdf-preview-lightbox" class="lightbox">
+    <button type="button" id="pdf-preview-lightbox-close" class="lightbox-close" aria-label="Close">×</button>
+    <figure class="lightbox-figure">
+      <img id="pdf-preview-lightbox-img" src="" alt="PDF page preview">
+      <figcaption id="pdf-preview-lightbox-caption" class="dim"></figcaption>
+    </figure>
+  </dialog>
 
   <main class="layout">
     <aside id="projects-rail" class="projects-rail">
@@ -121,11 +151,17 @@
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M4 4h6v6H4z"/>
             <path d="M14 4h6v6h-6z"/>
-            <path d="M4 14h6v6H4z"/>
-            <path d="M14 14h6v6h-6z"/>
+            <path d="M4 14h6v6h-6z"/>
             <path d="m17 17 3 3"/>
           </svg>
           <span class="nav-label">Upscale test</span>
+        </button>
+        <button id="nav-upscaler-models" class="rail-nav-item" type="button" title="Install or remove upscaler models (Ultramix, MPS weights, …)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3v6"/><path d="M12 15v6"/><path d="M3 12h6"/><path d="M15 12h6"/>
+            <circle cx="12" cy="12" r="2.5"/>
+          </svg>
+          <span class="nav-label">Models</span>
         </button>
       </nav>
       <div class="rail-header rail-header-row">
@@ -147,7 +183,8 @@
           <h2 class="hero-title">Turn deck lists into print-ready proxies.</h2>
           <p class="hero-sub">
             Fetch cards from Scryfall, pick the perfect art, upscale to 600 DPI,
-            and export A4 PDFs with cut guides — all local, no accounts.
+            and export print-ready PDFs (A4 or US Letter) with cut guides —
+            all local, no accounts.
           </p>
           <div class="hero-actions">
             <button id="btn-hero-new" class="primary large" type="button">
@@ -173,9 +210,9 @@
             <input id="np-name" type="text" placeholder="my-deck" autocomplete="off">
           </label>
           <label>
-            <span>Deck list or Moxfield URL</span>
+            <span>Deck list, Moxfield URL, or Archidekt URL</span>
             <textarea id="np-decklist" rows="12" spellcheck="false"
-              placeholder="https://www.moxfield.com/decks/YOUR-DECK-ID&#10;&#10;— or paste cards directly —&#10;&#10;1 Mazirek, Kraul Death Priest&#10;1x Sol Ring&#10;4 Llanowar Elves (M19) 314&#10;1 Fabled Passage [ELD] 244&#10;2 Swamp"></textarea>
+              placeholder="https://www.moxfield.com/decks/YOUR-DECK-ID&#10;https://archidekt.com/decks/YOUR-DECK-ID&#10;&#10;— or paste cards directly —&#10;&#10;1 Mazirek, Kraul Death Priest&#10;1x Sol Ring&#10;4 Llanowar Elves (M19) 314&#10;1 Fabled Passage [ELD] 244&#10;2 Swamp"></textarea>
           </label>
           <div class="or-divider"><span>or</span></div>
           <div>
@@ -535,6 +572,25 @@
       <button id="confirm-no" type="button" class="ghost">Cancel</button>
       <button id="confirm-yes" type="button" class="danger">Delete</button>
     </div>
+  </dialog>
+
+  <!-- Upscaler model manager -->
+  <dialog id="upscaler-models-modal" class="picker-modal upscaler-models-modal">
+    <div class="picker-modal-header">
+      <div class="picker-title-block">
+        <h2>Upscaler models</h2>
+        <p id="upscaler-models-subtitle" class="dim">
+          Enable extra upscaling engines. Installing downloads model files (~65 MB each) to <code>vendor/</code>.
+        </p>
+      </div>
+      <button id="upscaler-models-close" class="icon-button ghost" type="button" title="Close">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="upscaler-models-body" class="upscaler-models-body">
+      <p class="dim">Loading…</p>
+    </div>
+    <div id="upscaler-models-hint" class="dim upscaler-models-hint"></div>
   </dialog>
 
   <script src="/static/app.js"></script>

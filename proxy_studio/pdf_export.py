@@ -328,6 +328,60 @@ def render_registration_test(out_path: str | Path, *,
     return out_path
 
 
+def pdf_page_count(pdf_path: str | Path) -> int:
+    """Return the number of pages in a PDF."""
+    import pypdfium2 as pdfium
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    try:
+        return len(pdf)
+    finally:
+        pdf.close()
+
+
+def extract_pdf_page_bytes(pdf_path: str | Path, page_index: int) -> bytes:
+    """Return a single-page PDF derived from `pdf_path` at `page_index` (0-based).
+
+    Images and metadata from the source page are preserved, so the extracted
+    page prints identically to that page of the source document.
+    """
+    import io
+    import pypdfium2 as pdfium
+    src = pdfium.PdfDocument(str(pdf_path))
+    try:
+        if not 0 <= page_index < len(src):
+            raise IndexError(f"page {page_index} out of range (pdf has {len(src)} pages)")
+        dst = pdfium.PdfDocument.new()
+        dst.import_pages(src, [page_index])
+        buf = io.BytesIO()
+        dst.save(buf)
+        return buf.getvalue()
+    finally:
+        src.close()
+
+
+def render_pdf_page_to_png_bytes(pdf_path: str | Path, page_index: int, *,
+                                  dpi: int = 90) -> bytes:
+    """Render one PDF page to PNG-encoded bytes. Used by the preview endpoint."""
+    import io
+    import pypdfium2 as pdfium
+    scale = dpi / 72.0
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    try:
+        if not 0 <= page_index < len(pdf):
+            raise IndexError(f"page {page_index} out of range (pdf has {len(pdf)} pages)")
+        page = pdf.get_page(page_index)
+        try:
+            bitmap = page.render(scale=scale, rev_byteorder=True)
+            image = bitmap.to_pil()
+        finally:
+            page.close()
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        return buf.getvalue()
+    finally:
+        pdf.close()
+
+
 def rasterise_pdf_to_pngs(pdf_path: str | Path, *,
                            dpi: int = 300,
                            suffix_width: int = 2) -> list[Path]:

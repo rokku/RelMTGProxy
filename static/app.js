@@ -115,6 +115,48 @@ async function downloadRegistrationTest() {
   toast("Registration test PDF downloading — duplex-print on plain paper.", "ok");
 }
 
+// --- Paper size (persist per-browser — user's paper stock stays put across
+// projects; they'll usually only own one kind of paper).
+const PAPER_KEY = "relmtgproxy:paper";
+const PAPER_DEFAULT = "A4";
+const PAPER_VALID = new Set(["A4", "Letter"]);
+
+function loadPaper() {
+  const raw = localStorage.getItem(PAPER_KEY) || "";
+  return PAPER_VALID.has(raw) ? raw : PAPER_DEFAULT;
+}
+function savePaper(paper) {
+  if (PAPER_VALID.has(paper)) localStorage.setItem(PAPER_KEY, paper);
+}
+function currentPaper() {
+  const sel = $("#paper-size");
+  const v = sel?.value || PAPER_DEFAULT;
+  return PAPER_VALID.has(v) ? v : PAPER_DEFAULT;
+}
+
+// --- Print resolution target (600 or 1200 DPI). Persisted for the same
+// reason as paper — it describes the printer, not the deck.
+const DPI_KEY = "relmtgproxy:dpi-target";
+const DPI_DEFAULT = 600;
+const DPI_VALID = new Set([600, 1200]);
+
+function loadDpiTarget() {
+  const raw = parseInt(localStorage.getItem(DPI_KEY) || "", 10);
+  return DPI_VALID.has(raw) ? raw : DPI_DEFAULT;
+}
+function saveDpiTarget(dpi) {
+  if (DPI_VALID.has(dpi)) localStorage.setItem(DPI_KEY, String(dpi));
+}
+function currentDpiTarget() {
+  const sel = $("#dpi-target");
+  const v = parseInt(sel?.value || "", 10);
+  return DPI_VALID.has(v) ? v : DPI_DEFAULT;
+}
+function updateUpscaleLabel() {
+  const label = $("#upscale-label");
+  if (label) label.textContent = `${currentDpiTarget()} DPI upscale`;
+}
+
 // --- Deck-grid zoom --------------------------------------------------------
 const ZOOM_KEY = "relmtgproxy:deck-columns";
 const ZOOM_MIN = 2;
@@ -361,12 +403,15 @@ async function createProject() {
   status.className = "status";
   status.textContent = "";
 
-  const looksLikeUrl = /^\s*(?:https?:\/\/)?(?:www\.)?moxfield\.com\//i.test(decklist);
+  const moxUrl = /^\s*(?:https?:\/\/)?(?:www\.)?moxfield\.com\//i.test(decklist);
+  const arkUrl = /^\s*(?:https?:\/\/)?(?:www\.)?archidekt\.com\//i.test(decklist);
   openProgressModal({
     title: "Creating your deck",
-    sub: looksLikeUrl
+    sub: moxUrl
       ? "Contacting Moxfield…"
-      : (decklist.trim() ? "Resolving cards on Scryfall…" : "Setting up…"),
+      : arkUrl
+        ? "Contacting Archidekt…"
+        : (decklist.trim() ? "Resolving cards on Scryfall…" : "Setting up…"),
   });
 
   let result;
@@ -452,6 +497,8 @@ async function streamCreateProject(payload) {
       } else if (evt.event === "phase") {
         if (evt.data.phase === "moxfield-fetch") {
           setProgressSub("Fetching deck from Moxfield…");
+        } else if (evt.data.phase === "archidekt-fetch") {
+          setProgressSub("Fetching deck from Archidekt…");
         } else if (evt.data.phase === "resolving") {
           setProgressSub("Resolving cards on Scryfall…");
         }
@@ -1967,14 +2014,18 @@ function runExport() {
   $("#download-fronts").hidden = true;
   $("#download-backs").hidden = true;
   clearPngDownloads();
+  clearPdfPreview();
 
   const backs = $("#backs-mode")?.value || "none";
   const upscale = $("#upscale-checkbox")?.checked ? "true" : "false";
   const quality = $("#quality-mode")?.value || "quality";
   const format = $("#export-format")?.value || "pdf";
+  const paper = currentPaper();
+  const dpiTarget = currentDpiTarget();
   const { x: offsetX, y: offsetY } = currentOffsets();
   const params = new URLSearchParams({
-    backs, upscale, quality, format,
+    backs, upscale, quality, format, paper,
+    dpi_target: String(dpiTarget),
     back_offset_x: String(offsetX),
     back_offset_y: String(offsetY),
   });
@@ -2063,6 +2114,223 @@ function renderPngDownloads(sel, serverPaths, labelPrefix) {
   row.hidden = false;
 }
 
+// --- PDF preview strip -----------------------------------------------------
+// Called from the export `done` handler for PDF (and PNG — the source PDF is
+// still returned, so previewing that too gives a consistent one-strip UI).
+function clearPdfPreview() {
+  const strip = $("#pdf-preview-strip");
+  const box = $("#pdf-preview");
+  if (strip) strip.innerHTML = "";
+  if (box) box.hidden = true;
+  const hint = $("#pdf-preview-hint");
+  if (hint) hint.textContent = "";
+}
+
+function renderPdfPreview({ frontsPath, backsPath, frontsCount, backsCount }) {
+  const strip = $("#pdf-preview-strip");
+  const box = $("#pdf-preview");
+  const hint = $("#pdf-preview-hint");
+  if (!strip || !box) return;
+  strip.innerHTML = "";
+  const total = (frontsCount || 0) + (backsCount || 0);
+  if (!total || !frontsPath) {
+    box.hidden = true;
+    return;
+  }
+  const spec = [
+    { path: frontsPath, count: frontsCount, prefix: "F", kind: "" },
+    { path: backsPath, count: backsCount, prefix: "B", kind: "backs" },
+  ];
+  for (const group of spec) {
+    if (!group.path || !group.count) continue;
+    for (let i = 1; i <= group.count; i++) {
+      // Thumb is ~78×110 CSS px — 40 DPI (330×470 physical px) is already
+      // 4× the display size and keeps the payload ~50 KB. Lightbox at 150 DPI
+      // (~1240×1750) gives a crisp full-screen view without a monster PNG.
+      const thumbUrl = `/api/pdf-preview?path=${encodeURIComponent(group.path)}&page=${i}&dpi=40`;
+      const fullUrl = `/api/pdf-preview?path=${encodeURIComponent(group.path)}&page=${i}&dpi=150`;
+      const pageDownloadUrl = `/api/pdf-page?path=${encodeURIComponent(group.path)}&page=${i}`;
+      const label = `${group.prefix}${i}`;
+      const caption = `${group.kind ? "Back" : "Front"} page ${i} · ${group.path.split("/").pop()}`;
+      const wrap = el("div", { class: `pdf-preview-thumb${group.kind ? " " + group.kind : ""}` },
+        el("button", {
+          type: "button",
+          class: "pdf-preview-zoom",
+          title: `Zoom ${caption}`,
+          onclick: () => openPdfPreviewLightbox(fullUrl, caption),
+        },
+          el("img", { src: thumbUrl, alt: caption, loading: "lazy" }),
+        ),
+        el("div", { class: "pdf-preview-thumb-actions" },
+          el("span", { class: "thumb-label" }, label),
+          el("a", {
+            class: "thumb-download",
+            href: pageDownloadUrl,
+            download: "",
+            title: `Download just page ${i} as PDF`,
+            "aria-label": `Download page ${i}`,
+          }, "PDF"),
+        ),
+      );
+      strip.append(wrap);
+    }
+  }
+  if (hint) {
+    const parts = [];
+    if (frontsCount) parts.push(`${frontsCount} front page${frontsCount === 1 ? "" : "s"}`);
+    if (backsCount) parts.push(`${backsCount} back page${backsCount === 1 ? "" : "s"}`);
+    hint.textContent = parts.join(" · ") + " — click a thumb to zoom";
+  }
+  box.hidden = false;
+}
+
+function openPdfPreviewLightbox(url, caption) {
+  const dlg = $("#pdf-preview-lightbox");
+  const img = $("#pdf-preview-lightbox-img");
+  const cap = $("#pdf-preview-lightbox-caption");
+  if (!dlg || !img) return;
+  img.src = url;
+  if (cap) cap.textContent = caption || "";
+  if (!dlg.open) dlg.showModal();
+}
+
+function closePdfPreviewLightbox() {
+  const dlg = $("#pdf-preview-lightbox");
+  const img = $("#pdf-preview-lightbox-img");
+  if (dlg?.open) dlg.close();
+  if (img) img.src = "";  // stop loading a large image if it's still in flight
+}
+
+// --- Upscaler model manager -----------------------------------------------
+async function openUpscalerModelsModal() {
+  const dlg = $("#upscalerModelsModal") || $("#upscaler-models-modal");
+  if (!dlg) return;
+  if (!dlg.open) dlg.showModal();
+  await refreshUpscalerModels();
+}
+
+function closeUpscalerModelsModal() {
+  const dlg = $("#upscaler-models-modal");
+  if (dlg?.open) dlg.close();
+}
+
+async function refreshUpscalerModels() {
+  const body = $("#upscaler-models-body");
+  const hint = $("#upscaler-models-hint");
+  if (!body) return;
+  body.innerHTML = "<p class=\"dim\">Loading…</p>";
+  try {
+    const data = await api("/api/upscaler/status");
+    renderUpscalerModels(data);
+  } catch (e) {
+    body.innerHTML = "";
+    body.append(el("p", { class: "err" }, `Failed to load models: ${e.message}`));
+    if (hint) hint.textContent = "";
+  }
+}
+
+function renderUpscalerModels(data) {
+  const body = $("#upscaler-models-body");
+  const hint = $("#upscaler-models-hint");
+  body.innerHTML = "";
+  const canMps = !!data.torch_mps_available;
+  const canNcnnCustom = !!data.ncnn_binary_installed;
+  for (const m of data.models) {
+    const backends = el("div", { class: "upscaler-model-backends" });
+    backends.append(makeBackendLine(m, "ncnn", canNcnnCustom));
+    backends.append(makeBackendLine(m, "mps", canMps));
+    const row = el("div", { class: "upscaler-model-row" },
+      el("div", {},
+        el("h3", {}, m.quality),
+        el("p", {}, m.description || ""),
+        el("p", { class: "dim" }, `ncnn model: ${m.ncnn_name}`),
+      ),
+      backends,
+    );
+    body.append(row);
+  }
+  if (hint) {
+    const parts = [];
+    if (!canNcnnCustom) parts.push("ncnn base binary not installed — run `python cli.py setup-upscaler` first.");
+    if (!canMps) parts.push("PyTorch/MPS not detected — `pip install torch` to enable that backend.");
+    hint.textContent = parts.join("  ·  ");
+  }
+}
+
+function makeBackendLine(model, backend, backendAvailable) {
+  const entry = model[backend];
+  const line = el("div", { class: "upscaler-backend-line" });
+  line.append(el("span", { class: "backend-name" }, backend));
+
+  if (!entry.installable) {
+    line.classList.add("unavailable");
+    if (backend === "ncnn") {
+      line.append(el("span", { class: "backend-status" },
+        "base bundle — install with cli.py setup-upscaler"));
+    } else {
+      line.append(el("span", { class: "backend-status" }, "no MPS weights available"));
+    }
+    return line;
+  }
+
+  const status = el("span", { class: "backend-status" });
+  const actions = el("div", {});
+  if (entry.installed) {
+    line.classList.add("installed");
+    status.textContent = "installed";
+    const btn = el("button", {
+      class: "ghost",
+      type: "button",
+      onclick: () => uninstallUpscalerModel(model.quality, backend),
+    }, "Uninstall");
+    actions.append(btn);
+  } else {
+    status.textContent = "not installed";
+    const disabled = !backendAvailable;
+    const btn = el("button", {
+      class: "primary",
+      type: "button",
+      disabled: disabled ? "disabled" : null,
+      title: disabled
+        ? (backend === "ncnn"
+            ? "Install the ncnn base binary first (cli.py setup-upscaler)"
+            : "Install PyTorch first (pip install torch)")
+        : `Download files for ${model.quality} (${backend})`,
+      onclick: () => installUpscalerModel(model.quality, backend),
+    }, "Install");
+    actions.append(btn);
+  }
+  line.append(status, actions);
+  return line;
+}
+
+async function installUpscalerModel(quality, backend) {
+  const btnLabel = `${quality} · ${backend}`;
+  toast(`Installing ${btnLabel}…`, "ok");
+  try {
+    await api(`/api/upscaler/install/${encodeURIComponent(quality)}?backend=${backend}`,
+      { method: "POST" });
+    toast(`${btnLabel} installed`, "ok");
+  } catch (e) {
+    toast(`Install failed: ${e.message}`, "err");
+  }
+  await refreshUpscalerModels();
+}
+
+async function uninstallUpscalerModel(quality, backend) {
+  const ok = await confirmAction(
+    `Uninstall ${quality} (${backend})? You can reinstall from this panel later.`);
+  if (!ok) return;
+  try {
+    await api(`/api/upscaler/install/${encodeURIComponent(quality)}?backend=${backend}`,
+      { method: "DELETE" });
+    toast(`${quality} · ${backend} uninstalled`, "ok");
+  } catch (e) {
+    toast(`Uninstall failed: ${e.message}`, "err");
+  }
+  await refreshUpscalerModels();
+}
+
 function handleExportEvent(evt, status) {
   const { event, data } = evt;
   if (event === "start") {
@@ -2086,6 +2354,12 @@ function handleExportEvent(evt, status) {
       showDownload("#download-fronts", data.path);
       if (data.backs_path) showDownload("#download-backs", data.backs_path);
     }
+    renderPdfPreview({
+      frontsPath: data.path,
+      backsPath: data.backs_path,
+      frontsCount: data.page_count,
+      backsCount: data.backs_page_count,
+    });
     toast("Export complete — click to download", "ok");
   } else if (event === "error") {
     status.className = "status err";
@@ -2220,6 +2494,25 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#upscale-test-lightbox-close")?.addEventListener("click", closeUpscaleLightbox);
   upLb?.addEventListener("click", (ev) => {
     if (ev.target === upLb) closeUpscaleLightbox();
+  });
+
+  // PDF preview lightbox
+  const pdfLb = $("#pdf-preview-lightbox");
+  $("#pdf-preview-lightbox-close")?.addEventListener("click", closePdfPreviewLightbox);
+  pdfLb?.addEventListener("click", (ev) => {
+    if (ev.target === pdfLb) closePdfPreviewLightbox();
+  });
+  pdfLb?.addEventListener("cancel", (ev) => {
+    ev.preventDefault();
+    closePdfPreviewLightbox();
+  });
+
+  // Upscaler-models modal
+  $("#nav-upscaler-models")?.addEventListener("click", openUpscalerModelsModal);
+  const umDlg = $("#upscaler-models-modal");
+  $("#upscaler-models-close")?.addEventListener("click", closeUpscalerModelsModal);
+  umDlg?.addEventListener("click", (ev) => {
+    if (ev.target === umDlg) closeUpscalerModelsModal();
   });
   $("#nav-backs")?.addEventListener("click", openBacksModal);
 
@@ -2362,6 +2655,25 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#back-offset-x")?.addEventListener("change", persistOffsets);
   $("#back-offset-y")?.addEventListener("change", persistOffsets);
   $("#btn-align-test")?.addEventListener("click", downloadRegistrationTest);
+
+  // --- Paper size ---------------------------------------------------------
+  const paperSel = $("#paper-size");
+  if (paperSel) {
+    paperSel.value = loadPaper();
+    paperSel.addEventListener("change", () => savePaper(paperSel.value));
+  }
+
+  // --- Print resolution --------------------------------------------------
+  const dpiSel = $("#dpi-target");
+  if (dpiSel) {
+    dpiSel.value = String(loadDpiTarget());
+    dpiSel.addEventListener("change", () => {
+      const v = parseInt(dpiSel.value, 10);
+      saveDpiTarget(v);
+      updateUpscaleLabel();
+    });
+    updateUpscaleLabel();
+  }
 
   // --- Deck-grid zoom -----------------------------------------------------
   applyZoom(loadZoom());
