@@ -170,6 +170,28 @@ class TestModelCatalog:
         assert UP.cache_key_for("abc", 0, 2, "fast") == "abc_face0_x2_fast.png"
 
 
+class TestBinaryNamePerPlatform:
+    """The ncnn binary is `.exe` on Windows and plain elsewhere; the release
+    zip is picked per sys.platform. If either mapping regresses, users on
+    Windows/Linux end up with a silently broken setup-upscaler."""
+
+    @pytest.mark.parametrize("plat,expected", [
+        ("darwin", "realesrgan-ncnn-vulkan"),
+        ("linux", "realesrgan-ncnn-vulkan"),
+        ("win32", "realesrgan-ncnn-vulkan.exe"),
+    ])
+    def test_binary_name_matches_platform(self, plat, expected, monkeypatch):
+        monkeypatch.setattr("sys.platform", plat)
+        assert UP._binary_name() == expected
+
+    def test_all_three_platforms_have_a_release_zip(self):
+        # Guards against someone dropping a platform mapping in cli.py.
+        from cli import _NCNN_RELEASE_ZIPS
+        for plat in ("darwin", "linux", "win32"):
+            assert plat in _NCNN_RELEASE_ZIPS
+            assert _NCNN_RELEASE_ZIPS[plat].endswith(".zip")
+
+
 class TestSelectUpscaler:
     def test_explicit_unknown_backend_raises(self):
         with pytest.raises(ValueError, match="Unknown backend"):

@@ -211,12 +211,30 @@ def _setup_mps(args: argparse.Namespace) -> int:
     return 0
 
 
+_NCNN_RELEASE_ZIPS = {
+    # sys.platform → GitHub release asset filename.
+    "darwin": "realesrgan-ncnn-vulkan-20220424-macos.zip",
+    "linux":  "realesrgan-ncnn-vulkan-20220424-ubuntu.zip",
+    "win32":  "realesrgan-ncnn-vulkan-20220424-windows.zip",
+}
+_NCNN_RELEASE_BASE = ("https://github.com/xinntao/Real-ESRGAN/releases/"
+                       "download/v0.2.5.0/")
+
+
 def _setup_ncnn(args: argparse.Namespace) -> int:
     import io
+    import platform
     import shutil
     import stat
     import urllib.request
     import zipfile
+
+    zip_name = _NCNN_RELEASE_ZIPS.get(sys.platform)
+    if zip_name is None:
+        print(f"error: no prebuilt Real-ESRGAN binary for platform "
+              f"{sys.platform!r} ({platform.system()}). Supported: macOS, "
+              "Linux, Windows.", file=sys.stderr)
+        return 2
 
     vendor_dir = Path("vendor/realesrgan-ncnn-vulkan")
     binary = vendor_dir / UP.BINARY_NAME
@@ -233,11 +251,10 @@ def _setup_ncnn(args: argparse.Namespace) -> int:
     if args.force and vendor_dir.exists():
         shutil.rmtree(vendor_dir)
 
-    # v0.2.5.0 macOS build bundles the binary AND the ncnn model files
-    # (~50 MB). Earlier v0.2.0 only shipped the binary, which is useless
-    # without the .bin/.param model files.
-    url = ("https://github.com/xinntao/Real-ESRGAN/releases/"
-           "download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip")
+    # v0.2.5.0 bundles the binary AND the ncnn model files (~50 MB per OS).
+    # Earlier v0.2.0 only shipped the binary, which is useless without the
+    # .bin/.param model files.
+    url = _NCNN_RELEASE_BASE + zip_name
     print(f"Downloading {url}")
     try:
         with urllib.request.urlopen(url, timeout=180) as resp:
@@ -282,16 +299,22 @@ def _setup_ncnn(args: argparse.Namespace) -> int:
         print(f"error: binary missing after extract: {binary}", file=sys.stderr)
         return 2
 
-    # +x for owner/group/other.
-    mode = binary.stat().st_mode
-    binary.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    # On macOS/Linux mark the binary executable. Windows uses .exe and needs
+    # no chmod; skipping the call also avoids a spurious mode change.
+    if sys.platform != "win32":
+        mode = binary.stat().st_mode
+        binary.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     # Strip macOS Gatekeeper quarantine so the user isn't prompted every run.
-    try:
-        subprocess.run(["xattr", "-dr", "com.apple.quarantine", str(vendor_dir)],
-                       check=False, capture_output=True)
-    except FileNotFoundError:
-        pass
+    # No-op on other platforms (xattr doesn't exist there).
+    if sys.platform == "darwin":
+        try:
+            subprocess.run(
+                ["xattr", "-dr", "com.apple.quarantine", str(vendor_dir)],
+                check=False, capture_output=True,
+            )
+        except FileNotFoundError:
+            pass
 
     print(f"Installed to {binary}")
     print("Self-check…")

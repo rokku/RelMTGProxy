@@ -2114,6 +2114,33 @@ function renderPngDownloads(sel, serverPaths, labelPrefix) {
   row.hidden = false;
 }
 
+// --- First-run upscaler hint ----------------------------------------------
+// Prints without upscaling look softer than they need to. If we know the
+// user has no backend installed AND they just finished an export at 300 DPI,
+// nudge them once toward `setup-upscaler`. Never nag more than once per
+// browser — the localStorage key persists the dismissal.
+const UPSCALER_HINT_KEY = "relmtgproxy:upscaler-hint-shown";
+
+async function maybeSuggestUpscaler() {
+  if (localStorage.getItem(UPSCALER_HINT_KEY) === "1") return;
+  // If the user *did* upscale this run, no hint is needed even if we
+  // don't know why (they may have a system-wide install of the binary).
+  if ($("#upscale-checkbox")?.checked) return;
+  try {
+    const data = await api("/api/upscaler/status");
+    const anyInstalled =
+      data.ncnn_binary_installed ||
+      (data.models || []).some((m) => m.mps?.installed || m.ncnn?.installed);
+    if (anyInstalled) return;   // installed but not toggled on → user's call
+  } catch {
+    return;   // status endpoint failure — say nothing
+  }
+  // Deliberately quiet: a longer-lived info toast, not a modal.
+  const hint = "Tip: install the upscaler for sharper 600 DPI prints — see the README (`python cli.py setup-upscaler`).";
+  toast(hint, "ok");
+  localStorage.setItem(UPSCALER_HINT_KEY, "1");
+}
+
 // --- PDF preview strip -----------------------------------------------------
 // Called from the export `done` handler for PDF (and PNG — the source PDF is
 // still returned, so previewing that too gives a consistent one-strip UI).
@@ -2361,6 +2388,7 @@ function handleExportEvent(evt, status) {
       backsCount: data.backs_page_count,
     });
     toast("Export complete — click to download", "ok");
+    maybeSuggestUpscaler();
   } else if (event === "error") {
     status.className = "status err";
     status.textContent = `error: ${data.message}`;

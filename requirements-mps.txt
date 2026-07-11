@@ -1,6 +1,16 @@
-# Optional deps for the MPS/PyTorch upscaler backend (native Apple Silicon).
+# Optional deps for the PyTorch-based upscaler backend.
+#
+# The `--backend mps` flag refers to the auto-selected device:
+#   - Apple Silicon → Metal (MPS)
+#   - Nvidia + CUDA → CUDA
+#   - anything else → CPU (slow but works)
+#
 # Install with: pip install -r requirements-mps.txt
-# Then: python cli.py setup-upscaler --backend mps
+# Then:         python cli.py setup-upscaler --backend mps
+#
+# Nvidia users: install a CUDA-linked torch instead of the default wheel
+# (which is CPU-only on Windows/Linux) — see the README's "higher-quality
+# prints" section for the one-line command.
 #
 # Verified against PyPI on 2026-07-04. PyTorch 2.12.x has native arm64
 # wheels with MPS support baked in.

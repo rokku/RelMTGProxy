@@ -28,7 +28,23 @@ log = logging.getLogger(__name__)
 # --- Paths / constants ------------------------------------------------------
 DEFAULT_CACHE_DIR = Path("cache/images/upscaled")
 DEFAULT_VENDOR_DIR = Path("vendor/realesrgan-ncnn-vulkan")
-BINARY_NAME = "realesrgan-ncnn-vulkan"
+
+
+def _binary_name() -> str:
+    """Executable name for the ncnn-vulkan binary on the current OS.
+
+    The prebuilt release ships as `.exe` on Windows and plain executables
+    on macOS/Linux. Callers should always go through this rather than
+    hardcoding a name so the same code paths work on all three platforms.
+    """
+    import sys
+    return "realesrgan-ncnn-vulkan.exe" if sys.platform == "win32" \
+        else "realesrgan-ncnn-vulkan"
+
+
+# Kept as a module-level constant for callers that treat it as a name;
+# always resolved lazily via `_binary_name()` on the current OS.
+BINARY_NAME = _binary_name()
 
 MPS_VENDOR_DIR = Path("vendor/mps")
 
@@ -171,14 +187,16 @@ class NcnnVulkanUpscaler:
             )
 
     def _resolve_binary(self) -> Path:
-        # The zip nests everything under `realesrgan-ncnn-vulkan-v0.2.0-macos/`;
-        # setup-upscaler strips that, but be forgiving either way.
-        for candidate in (
-            self.vendor_dir / BINARY_NAME,
-            self.vendor_dir / "realesrgan-ncnn-vulkan-v0.2.0-macos" / BINARY_NAME,
-        ):
+        # The Real-ESRGAN release zip nests everything under
+        # `realesrgan-ncnn-vulkan-<date>-<os>/`; setup-upscaler flattens
+        # that, but be forgiving of both layouts on any platform.
+        for candidate in [self.vendor_dir / BINARY_NAME]:
             if candidate.exists():
                 return candidate
+        for sub in self.vendor_dir.glob("realesrgan-ncnn-vulkan-*"):
+            nested = sub / BINARY_NAME
+            if nested.exists():
+                return nested
         return self.vendor_dir / BINARY_NAME
 
     def _resolve_models_dir(self) -> Path:
