@@ -483,3 +483,47 @@ class TestNameValidation:
         r = client.post("/api/projects", json={"name": good,
                                                 "decklist": "1 Sol Ring\n"})
         assert r.status_code == 201, f"expected 201 for {good!r}: {r.text}"
+
+
+class TestSafeUploadName:
+    """The upload sanitiser is a load-bearing security boundary: every
+    caller that does `dir / _safe_upload_name(x)` relies on the return
+    value being harmless."""
+
+    @pytest.mark.parametrize("raw", [
+        "normal.png",
+        "a/b.png",                # path separator inside
+        "a\\b.png",               # windows path separator inside
+        "../evil.png",            # attempted traversal
+        "...secret.png",          # leading dots
+        "with<>bad|chars?.png",   # windows-hostile
+        "\x00null.png",           # control character
+    ])
+    def test_output_is_always_path_safe(self, raw):
+        got = srv._safe_upload_name(raw)
+        # Whatever the sanitiser returns must never contain a path segment
+        # separator, start with a dot (would hide the file / traverse up),
+        # or contain characters the Windows FS rejects.
+        assert "/" not in got
+        assert "\\" not in got
+        assert not got.startswith(".")
+        assert not any(c in got for c in '<>:"|?*')
+        assert not any(ord(c) < 0x20 for c in got)
+        assert got, "sanitiser must never return empty"
+
+    @pytest.mark.parametrize("reserved", [
+        "CON.png", "con.png", "Con.PNG",     # case-insensitive
+        "NUL.jpg", "PRN.png", "AUX.png",
+        "COM1.png", "COM9.png", "LPT1.png", "LPT9.png",
+    ])
+    def test_windows_reserved_names_prefixed(self, reserved):
+        got = srv._safe_upload_name(reserved)
+        # Anything the OS would refuse to create must be prefixed so the
+        # stem is no longer a reserved device name.
+        stem = got.partition(".")[0]
+        assert stem.upper() not in srv._WINDOWS_RESERVED_NAMES, got
+
+    def test_never_empty(self):
+        assert srv._safe_upload_name("") == "upload"
+        assert srv._safe_upload_name("...") == "upload"
+        assert srv._safe_upload_name("   ") == "upload"

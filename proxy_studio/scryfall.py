@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import secrets
 import threading
 import time
 import urllib.parse
@@ -108,7 +109,7 @@ class ScryfallClient:
             raise ScryfallError(f"{resp.status_code} from Scryfall for {url}: {resp.text[:200]}")
 
         data = resp.json()
-        tmp = cache_path.with_suffix(".tmp")
+        tmp = _unique_tmp_path(cache_path)
         tmp.write_text(json.dumps(data), encoding="utf-8")
         tmp.replace(cache_path)
         return data
@@ -219,7 +220,7 @@ class ScryfallClient:
         resp = self.session.get(face.image_url, timeout=60, stream=True)
         if resp.status_code >= 400:
             raise ScryfallError(f"{resp.status_code} fetching image {face.image_url}")
-        tmp = out.with_suffix(".png.tmp")
+        tmp = _unique_tmp_path(out)
         with tmp.open("wb") as fh:
             for chunk in resp.iter_content(chunk_size=64 * 1024):
                 if chunk:
@@ -280,3 +281,10 @@ def _released_key(p: dict[str, Any]) -> int:
         return int(d.replace("-", ""))
     except ValueError:
         return 0
+
+
+def _unique_tmp_path(target: Path) -> Path:
+    """Sibling path with a random suffix — see the identical helper in
+    `upscale.py` for the rationale (concurrent writers + Windows locks)."""
+    token = secrets.token_hex(4)
+    return target.with_suffix(target.suffix + f".{token}.tmp")

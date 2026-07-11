@@ -265,6 +265,11 @@ def _setup_ncnn(args: argparse.Namespace) -> int:
     print(f"Downloaded {len(data) / 1024 / 1024:.1f} MB; extracting…")
 
     vendor_dir.mkdir(parents=True, exist_ok=True)
+    # Guard against Zip Slip: even though we trust the GitHub release, a
+    # malformed archive with `../` entries would otherwise let a file land
+    # outside `vendor_dir`. Resolve `vendor_dir` once so the containment
+    # check compares real paths (macOS symlinks the tmpdir under /var).
+    vendor_root = vendor_dir.resolve()
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         # Some releases nest everything under a single top-level dir, others
         # extract flat. Detect and strip only if a common prefix exists.
@@ -288,6 +293,14 @@ def _setup_ncnn(args: argparse.Namespace) -> int:
             else:
                 rel = Path(*parts)
             dst = vendor_dir / rel
+            # Refuse anything that resolves outside vendor_dir — blocks
+            # `..` traversal and absolute paths embedded in the archive.
+            try:
+                dst.resolve().relative_to(vendor_root)
+            except ValueError:
+                print(f"error: refusing to extract member outside vendor "
+                      f"dir: {member.filename!r}", file=sys.stderr)
+                return 2
             if member.is_dir():
                 dst.mkdir(parents=True, exist_ok=True)
                 continue

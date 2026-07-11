@@ -8,6 +8,14 @@ pick the art you like, hit export, print, cut, play.
 
 Runs on **macOS, Windows, and Linux**.
 
+> **Cross-platform status (as of 2026-07):** the code is written to be
+> portable and the test suite (235 tests) runs green on macOS, but the
+> maintainer has only used it on Apple Silicon in anger. Windows and
+> Linux support was added in a single pass — it *should* work end-to-end,
+> and the known-untested edges are called out in the
+> [caveats section](#windows-and-linux-caveats) below. If something
+> breaks on your machine please open an issue with the traceback.
+
 ## What you need
 
 - **Python 3.10 or newer.** Check by opening a terminal and running
@@ -290,6 +298,53 @@ CPU (`pip install -r requirements-mps.txt`).
 
 **Moxfield / Archidekt import says "deck not found"** — the deck is
 private (login-only) or has been deleted. Only public decks work.
+
+## Windows and Linux caveats
+
+These are the specific things the maintainer hasn't verified on real
+hardware. None are known to be broken — they're things worth watching
+for:
+
+- **Windows Defender / SmartScreen may flag `realesrgan-ncnn-vulkan.exe`
+  on first run.** The binary comes straight from the official
+  [Real-ESRGAN GitHub release](https://github.com/xinntao/Real-ESRGAN/releases/tag/v0.2.5.0),
+  unsigned. If your AV quarantines it, you'll need to restore it and
+  add an exclusion for the `vendor\` folder. Some antivirus products
+  will also flag Vulkan-based upscalers as "potentially unwanted"
+  regardless of source; use Option B (PyTorch) if that's you.
+- **Windows Long Paths.** If your project ends up nested very deep
+  (`C:\Users\<long name>\Documents\<...>\RelMTGProxy`), the cache paths
+  can approach the classic 260-char limit. Modern Windows 10/11 have a
+  Long Paths opt-in — enable it via `gpedit.msc` → *Computer
+  Configuration* → *Administrative Templates* → *System* → *Filesystem*
+  → *Enable Win32 long paths*, or the equivalent registry key. Or just
+  put the project folder near the root of a drive.
+- **Vulkan drivers are required for Option A.** Any modern Intel /
+  AMD / Nvidia driver ships with Vulkan, but headless VMs, WSL2 without
+  GPU passthrough, and some very old integrated GPUs don't. Option B
+  (PyTorch) falls back to CPU cleanly in those cases.
+- **Case-sensitivity on Linux.** Project names and uploaded filenames
+  keep their original case. `MyDeck` and `mydeck` are two different
+  projects on Linux and the same one on macOS/Windows. Don't mix
+  cases when moving projects between OSes.
+- **CRLF vs LF in decklists.** The parser is line-oriented and treats
+  either the same, but if you're editing decklists on Windows and
+  pasting into the browser, extra trailing whitespace can occasionally
+  make Scryfall lookups miss. Strip trailing whitespace if a lookup
+  fails on a card you know exists.
+- **CUDA setup takes a specific command.** The plain `pip install torch`
+  wheel on Windows/Linux is CPU-only. See the
+  "[higher-quality prints](#optional-higher-quality-prints-600-dpi-or-1200-dpi)"
+  section — it's a one-line change to use a CUDA-linked wheel.
+- **Windows console encoding.** The tool prints unicode (mm arrows,
+  em-dashes, card names with diacritics). Modern Windows Terminal / PS7
+  handles UTF-8 fine; legacy `cmd.exe` sometimes shows `?` marks in the
+  logs. Cosmetic only — files on disk are always UTF-8.
+- **Server binds to 127.0.0.1 only.** Not a bug — a deliberate choice.
+  If you want to expose the UI to another device on your LAN (e.g. a
+  tablet), you'll need to add `--host 0.0.0.0` support or run behind a
+  reverse proxy. Doing so removes localhost-only protection so only do
+  it on a trusted network.
 
 ## What's under the hood (specification)
 

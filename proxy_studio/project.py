@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -114,6 +115,10 @@ class Project:
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    # Random suffix so two concurrent saves don't race on the same .tmp
+    # (matters on Windows in particular, where an open handle blocks the
+    # final rename).
+    token = secrets.token_hex(4)
+    tmp = path.with_suffix(path.suffix + f".{token}.tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)

@@ -25,6 +25,7 @@ import json
 import logging
 import re
 import urllib.parse
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -118,13 +119,23 @@ class QuantityRequest(BaseModel):
     quantity: int
 
 
+# Bound on how many oracle_ids we hold printings for at once. Each entry is
+# up to a few hundred KB of decoded JSON; 512 keeps memory well under 200 MB
+# even for a marathon browsing session, without evicting so aggressively
+# that the picker feels sluggish on a real deck.
+_PRINTINGS_CACHE_MAX = 512
+
+
 @dataclass
 class AppState:
     projects_dir: Path
     client: SF.ScryfallClient
     # Oracle-level printings cache — safe to share across projects because
-    # printings only depend on the oracle_id.
-    printings_cache: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # printings only depend on the oracle_id. Bounded LRU semantics via
+    # `_touch_printings_cache` so a long-lived server can't drift to
+    # unbounded memory.
+    printings_cache: OrderedDict[str, list[dict[str, Any]]] = field(
+        default_factory=OrderedDict)
 
 
 def create_app(projects_dir: str | Path = "projects",
@@ -388,20 +399,16 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
             if ext not in _ALLOWED_UPLOAD_EXTS:
                 raise HTTPException(400,
                     f"Unsupported file type {ext!r}. Use PNG, JPG or WebP.")
-            data = await uf.read()
-            if not data:
-                continue
-            if len(data) > _MAX_UPLOAD_BYTES:
-                raise HTTPException(400,
-                    f"{uf.filename}: file too large "
-                    f"({len(data) / 1024 / 1024:.1f} MB)")
             safe = _safe_upload_name(uf.filename or f"back{ext}")
             target = _unique_path(BACKS_ROOT / safe)
-            target.write_bytes(data)
+            size = await _stream_upload_to_disk(uf, target)
+            if size == 0:
+                target.unlink(missing_ok=True)
+                continue
             added.append({
                 "filename": target.name,
                 "url": f"/backs/{target.name}",
-                "size": len(data),
+                "size": size,
             })
         return {"added": added,
                 "total_in_library": len(list(BACKS_ROOT.iterdir()))}
@@ -409,8 +416,6 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
     @app.delete("/api/backs/{filename}", status_code=204)
     def delete_back(filename: str) -> None:
         safe = _safe_upload_name(filename)
-        if "/" in safe or "\\" in safe or safe.startswith("."):
-            raise HTTPException(400, "invalid filename")
         path = BACKS_ROOT / safe
         if not path.exists():
             raise HTTPException(404, f"back {filename!r} not found")
@@ -470,8 +475,6 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
     @app.delete("/api/library/{filename}", status_code=204)
     def delete_library_asset(filename: str) -> None:
         safe = _safe_upload_name(filename)
-        if "/" in safe or "\\" in safe or safe.startswith("."):
-            raise HTTPException(400, "invalid filename")
         path = _library_dir() / safe
         if not path.exists():
             raise HTTPException(404, f"library asset {filename!r} not found")
@@ -540,8 +543,6 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
         project = _load(name, state)
         entry = _entry_at(project, index)
         safe = _safe_upload_name(req.filename)
-        if "/" in safe or "\\" in safe or safe.startswith("."):
-            raise HTTPException(400, "invalid filename")
         asset = _library_dir() / safe
         if not asset.exists():
             raise HTTPException(404, f"library asset {req.filename!r} not found")
@@ -664,6 +665,7 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
         state: AppState = app.state.picker
         if oracle_id in state.printings_cache:
             printings = state.printings_cache[oracle_id]
+            state.printings_cache.move_to_end(oracle_id)  # LRU touch
         else:
             url = (f"{SF.API_BASE}/cards/search?q=oracleid%3A{oracle_id}"
                    f"&unique=prints&order=released")
@@ -677,6 +679,9 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
                 printings.extend(page.get("data", []))
                 next_url = page.get("next_page") if page.get("has_more") else None
             state.printings_cache[oracle_id] = printings
+            # Evict oldest entries once the cap is exceeded.
+            while len(state.printings_cache) > _PRINTINGS_CACHE_MAX:
+                state.printings_cache.popitem(last=False)
         return {
             "oracle_id": oracle_id,
             "printings": [_thumbnail_view(p) for p in printings],
@@ -890,6 +895,41 @@ def _resolve_output_path(rel_path: str) -> Path:
         raise HTTPException(400, "path must point to a PDF")
     return candidate
 
+
+async def _stream_upload_to_disk(uf: "UploadFile", target: Path,
+                                  max_bytes: int = _MAX_UPLOAD_BYTES,
+                                  chunk_size: int = 1024 * 1024) -> int:
+    """Copy `uf` to `target` in chunks; abort if `max_bytes` is exceeded.
+
+    Returns the total bytes written. Deletes the partial file on abort so
+    a rejected upload doesn't leave debris. Never holds more than one
+    chunk in memory, so a malicious client can't OOM the process by
+    streaming multiple gigabytes at a single-file upload endpoint.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    total = 0
+    try:
+        with target.open("wb") as fh:
+            while True:
+                chunk = await uf.read(chunk_size)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    fh.close()
+                    target.unlink(missing_ok=True)
+                    raise HTTPException(400,
+                        f"{uf.filename}: file too large "
+                        f"(>{max_bytes // 1024 // 1024} MB)")
+                fh.write(chunk)
+    except HTTPException:
+        raise
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    return total
+
+
 async def _save_uploads_to_library(files: "list[UploadFile]") -> list[dict[str, Any]]:
     """Write each uploaded image to the shared library dir.
 
@@ -904,22 +944,17 @@ async def _save_uploads_to_library(files: "list[UploadFile]") -> list[dict[str, 
         if ext not in _ALLOWED_UPLOAD_EXTS:
             raise HTTPException(400,
                 f"Unsupported file type {ext!r}. Use PNG, JPG or WebP.")
-        data = await uf.read()
-        if not data:
-            continue
-        if len(data) > _MAX_UPLOAD_BYTES:
-            raise HTTPException(400,
-                f"{uf.filename}: file too large "
-                f"({len(data) / 1024 / 1024:.1f} MB > "
-                f"{_MAX_UPLOAD_BYTES / 1024 / 1024:.0f} MB)")
         safe = _safe_upload_name(uf.filename or f"upload{ext}")
         target = _unique_path(_library_dir() / safe)
-        target.write_bytes(data)
+        size = await _stream_upload_to_disk(uf, target)
+        if size == 0:
+            target.unlink(missing_ok=True)
+            continue
         out.append({
             "filename": target.name,
             "path": f"cache/images/custom/{LIBRARY_DIRNAME}/{target.name}",
             "url": f"/uploads/{LIBRARY_DIRNAME}/{target.name}",
-            "size": len(data),
+            "size": size,
         })
     return out
 
@@ -1076,17 +1111,40 @@ def _http_detail_to_str(detail: Any) -> str:
     return json.dumps(detail)
 
 
+# Windows reserves these names at the OS level — any file called `CON`,
+# `CON.png`, `nul.jpg`, etc. fails at open() time with an OSError. Pattern
+# matches the stem (before the first dot), case-insensitively.
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
 def _safe_upload_name(filename: str) -> str:
     """Sanitise an uploaded file's name to keep it filesystem-safe.
 
-    Replaces path separators + windows-hostile chars with underscores; preserves
-    everything else the user typed (they'll see this in the entry list).
+    Guarantees on the returned string (callers rely on these):
+      - no path separators (`/`, `\\`) — replaced with `_`
+      - no Windows-hostile chars (`<>:"|?*`) or control chars
+      - never starts with `.` (leading dots/spaces stripped)
+      - never a Windows-reserved device name (`CON.png` → `_CON.png`)
+      - always non-empty; falls back to `"upload"`
+
+    So `BACKS_ROOT / _safe_upload_name(x)` and equivalents cannot escape
+    the intended directory even if `x` was adversarial.
     """
     hostile = set('/\\<>:"|?*')
     cleaned = "".join(("_" if (c in hostile or ord(c) < 0x20) else c)
                       for c in filename)
     cleaned = cleaned.strip(" .")
-    return cleaned or "upload"
+    if not cleaned:
+        return "upload"
+    # Reserved-name check operates on the pre-extension stem.
+    stem, _, _ = cleaned.partition(".")
+    if stem.upper() in _WINDOWS_RESERVED_NAMES:
+        cleaned = "_" + cleaned
+    return cleaned
 
 
 def _unique_path(target: Path) -> Path:
@@ -1482,6 +1540,10 @@ async def _export_stream(state: AppState, *, project_name: str,
         yield _sse("error", {"message": f"Project {project_name!r} not found"})
         return
 
+    # Declared outside the try so the finally can always safely reference
+    # it, even if the export bails before any prefetch has been scheduled.
+    pending: dict[int, "asyncio.Task"] = {}
+
     try:
         total = len(project.entries)
         yield _sse("start", {"total": total, "project": project.name,
@@ -1499,8 +1561,6 @@ async def _export_stream(state: AppState, *, project_name: str,
             )
             front, _back = state.client.face_images_for(card)
             return front, state.client.download_image(front)
-
-        pending: dict[int, "asyncio.Task"] = {}
 
         def _prefetch_from(start_idx: int) -> None:
             """Kick off the download for the next non-custom entry at or
@@ -1732,3 +1792,11 @@ async def _export_stream(state: AppState, *, project_name: str,
     except Exception as e:
         log.exception("Export failed")
         yield _sse("error", {"message": str(e)})
+    finally:
+        # Whether the stream finished cleanly, errored, or the client
+        # disconnected mid-flight, any prefetched download tasks that never
+        # got awaited are still holding onto the thread pool + a socket
+        # connection to Scryfall. Cancel them so they don't leak.
+        for task in list(pending.values()):
+            if not task.done():
+                task.cancel()

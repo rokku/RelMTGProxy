@@ -13,6 +13,7 @@ dedicated 2× model.
 from __future__ import annotations
 
 import logging
+import secrets
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -527,7 +528,7 @@ def download_ncnn_model(quality: QualityName, *,
                          (spec.ncnn_param_url, param_target)):
         with urllib.request.urlopen(url, timeout=180) as resp:
             data = resp.read()
-        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp = _unique_tmp_path(target)
         tmp.write_bytes(data)
         tmp.replace(target)
     return bin_target, param_target
@@ -553,7 +554,7 @@ def download_mps_weights(quality: QualityName, *,
         return target
     with urllib.request.urlopen(spec.mps_weights_url, timeout=180) as resp:
         data = resp.read()
-    tmp = target.with_suffix(".pth.tmp")
+    tmp = _unique_tmp_path(target)
     tmp.write_bytes(data)
     tmp.replace(target)
     return target
@@ -626,10 +627,22 @@ def upscale_image(src: Path, scryfall_id: str, face_index: int, *,
     if upscaler is None:
         upscaler = select_upscaler("auto", quality=quality)
 
-    tmp = out.with_suffix(out.suffix + ".tmp")
+    tmp = _unique_tmp_path(out)
     upscaler.upscale(Path(src), tmp, scale=scale)
     tmp.replace(out)
     return out
+
+
+def _unique_tmp_path(target: Path) -> Path:
+    """Sibling path with a random suffix, e.g. `foo.png.9a3f.tmp`.
+
+    Two concurrent writers to the same `target` would otherwise fight
+    over one fixed `.tmp` file — on Windows in particular, the loser's
+    `Path.replace` fails when the winner still has a handle open. The
+    random token keeps the two writes disjoint until the final rename.
+    """
+    token = secrets.token_hex(4)
+    return target.with_suffix(target.suffix + f".{token}.tmp")
 
 
 # --- DPI gate --------------------------------------------------------------
