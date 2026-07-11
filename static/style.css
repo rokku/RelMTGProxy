@@ -156,15 +156,27 @@ body {
      mark, not a rectangle pasted onto the topbar. */
 }
 .project-badge {
-  padding: 4px 10px;
-  border-radius: var(--r-full);
-  background: rgba(167, 139, 250, 0.10);
-  border: 1px solid var(--border-brand);
+  /* Deck-view pane title. Full-width heading above the deck toolbar —
+     long commander names like `Mr. House, President and CEO` get to
+     breathe rather than being pinched by the topbar's action chips. */
+  margin: 0;
+  padding: 18px 24px 10px;
+  font-family: inherit;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
   color: var(--text-0);
-  font-size: 12px;
-  font-weight: 500;
-  margin-left: 4px;
+  /* Subtle accent underline in the brand purple so the title reads as
+     "you are viewing THIS deck" rather than as free-floating heading. */
+  background: linear-gradient(180deg, rgba(139,92,246,0.06), transparent);
+  border-bottom: 1px solid var(--border);
+  word-break: break-word;
 }
+/* An empty h1 shouldn't push everything down when no project is loaded —
+   the parent `.deck-view` is hidden in that state, but hide the title
+   itself too if for any reason it ends up rendered without content. */
+.project-badge:empty { display: none; }
 .actions {
   display: flex;
   align-items: center;
