@@ -1613,6 +1613,65 @@ kbd {
   background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent);
 }
 .picker-title-block { flex: 1 1 auto; min-width: 200px; }
+.picker-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.picker-title-row #picker-subtitle { margin: 0; }
+
+.qty-stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--bg-2);
+}
+.qty-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 140ms var(--ease), color 140ms var(--ease);
+  box-shadow: none;
+}
+.qty-btn:hover { background: rgba(139,92,246,0.15); color: var(--text-0); transform: none; }
+.qty-btn:active { background: rgba(139,92,246,0.30); }
+.qty-stepper input {
+  width: 44px;
+  height: 26px;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-0);
+  text-align: center;
+  font-weight: 600;
+  font-size: 13px;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.qty-stepper input::-webkit-outer-spin-button,
+.qty-stepper input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.qty-stepper input:focus { outline: none; background: rgba(139,92,246,0.08); }
+
+#picker-split-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 .picker-tabs {
   display: inline-flex;

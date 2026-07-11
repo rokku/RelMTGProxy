@@ -267,7 +267,18 @@
     <div class="picker-modal-header">
       <div class="picker-title-block">
         <h2 id="picker-title">Select a card</h2>
-        <p id="picker-subtitle" class="dim"></p>
+        <div class="picker-title-row">
+          <div class="qty-stepper" id="picker-qty" title="How many copies of this card to include (1–999)">
+            <button type="button" class="qty-btn" id="picker-qty-dec" aria-label="Decrease quantity">−</button>
+            <input type="number" id="picker-qty-input" min="1" max="999" step="1" value="1" aria-label="Quantity">
+            <button type="button" class="qty-btn" id="picker-qty-inc" aria-label="Increase quantity">+</button>
+          </div>
+          <button type="button" id="picker-split-btn" class="ghost tiny-btn" title="Split this stack into two entries so each half can use different art. E.g. 20 → 10 + 10.">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v6"/><path d="M6 21l6-12 6 12"/></svg>
+            Split
+          </button>
+          <p id="picker-subtitle" class="dim"></p>
+        </div>
       </div>
       <div class="picker-tabs" role="tablist">
         <button class="picker-tab active" id="picker-tab-printings" data-tab="printings" role="tab" type="button">

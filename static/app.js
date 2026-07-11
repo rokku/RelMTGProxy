@@ -760,6 +760,44 @@ async function reorderEntry(from, to) {
   renderDeckGrid();
 }
 
+async function setEntryQuantity(index, quantity) {
+  if (!state.activeProject) return;
+  const entries = state.project?.entries;
+  if (!entries || !entries[index]) return;
+  const q = Math.max(1, Math.min(999, Math.round(quantity)));
+  if (q === entries[index].quantity) return;
+  try {
+    const res = await api(
+      `/api/projects/${encodeURIComponent(state.activeProject)}/entries/${index}/quantity`,
+      { method: "POST", body: JSON.stringify({ quantity: q }) },
+    );
+    entries[index].quantity = res.entry.quantity;
+    renderDeckGrid();
+    if (state.activeIndex === index) updatePickerQuantityUI();
+    await refreshProjects();
+  } catch (e) {
+    toast(`Update failed: ${e.message}`, "err");
+    if (state.activeIndex === index) updatePickerQuantityUI();
+  }
+}
+
+async function splitEntry(index) {
+  const entries = state.project?.entries;
+  if (!entries || !entries[index]) return;
+  const total = entries[index].quantity;
+  if (total < 2) {
+    toast("Need at least 2 copies to split", "err");
+    return;
+  }
+  const half = Math.floor(total / 2);
+  // Duplicate creates a clone at index+1 with the same quantity, then we
+  // resize both halves. Original keeps the larger half on odd totals.
+  await duplicateEntry(index);
+  await setEntryQuantity(index, total - half);
+  await setEntryQuantity(index + 1, half);
+  toast(`Split ${total}× into ${total - half} + ${half}`, "ok");
+}
+
 async function duplicateEntry(index) {
   if (!state.activeProject) return;
   try {
@@ -827,15 +865,13 @@ async function deleteEntry(index) {
 // --- Printings --------------------------------------------------------------
 async function loadPrintings(entry) {
   $("#picker-title").textContent = entry.name;
-  $("#picker-subtitle").textContent = `${entry.quantity}× — loading printings…`;
+  $("#picker-subtitle").textContent = "loading printings…";
   $("#printings").innerHTML = "";
   $("#load-more-bar").hidden = true;
   state.visibleCount = PAGE_SIZE;
   try {
     const data = await api(`/api/prints/${entry.oracle_id}`);
     state.printings = data.printings;
-    $("#picker-subtitle").textContent =
-      `${entry.quantity}×  ·  ${state.printings.length} printings on Scryfall`;
     renderPrintings();
     $("#printings-scroll").scrollTop = 0;
   } catch (e) {
@@ -881,6 +917,11 @@ function renderPrintings() {
 
   const entry = state.project.entries[state.activeIndex];
   const filtered = state.printings.filter(passesFilter);
+  const total = state.printings.length;
+  const hidden = total - filtered.length;
+  $("#picker-subtitle").textContent = hidden > 0
+    ? `${filtered.length} of ${total} printings (${hidden} hidden by filters)`
+    : `${total} printings on Scryfall`;
   const currentId = entry.selected_print.scryfall_id;
   const selectedIndex = filtered.findIndex((p) => p.id === currentId);
   const visible = filtered.slice(0, state.visibleCount);
@@ -892,7 +933,7 @@ function renderPrintings() {
   }
   if (filtered.length === 0) {
     grid.append(el("p", { class: "empty" },
-      `No printings match the current filters (${state.printings.length} hidden).`));
+      `No printings match the current filters (${total} hidden).`));
     return;
   }
   const remaining = filtered.length - state.visibleCount;
@@ -942,11 +983,22 @@ function passesFilter(p) {
   return p.frame === f;
 }
 
+function updatePickerQuantityUI() {
+  if (state.activeIndex === null) return;
+  const entry = state.project?.entries[state.activeIndex];
+  if (!entry) return;
+  const input = $("#picker-qty-input");
+  if (input) input.value = String(entry.quantity);
+  const splitBtn = $("#picker-split-btn");
+  if (splitBtn) splitBtn.disabled = entry.quantity < 2;
+}
+
 function openPickerModal(index) {
   state.activeIndex = index;
   const entry = state.project.entries[index];
   const dlg = $("#picker-modal");
   if (!dlg.open) dlg.showModal();
+  updatePickerQuantityUI();
 
   // Default tab: Library for custom entries (they have no Scryfall printings
   // to offer anyway), Printings otherwise.
@@ -1018,7 +1070,7 @@ function showCustomInModal(entry) {
   const url = `/uploads/${encodeURIComponent(subdir)}/${encodeURIComponent(filename)}`;
 
   $("#picker-title").textContent = entry.name;
-  $("#picker-subtitle").textContent = `${entry.quantity}×  ·  custom uploaded art`;
+  $("#picker-subtitle").textContent = "custom uploaded art";
   $("#load-more-bar").hidden = true;
 
   const grid = $("#printings");
@@ -2272,6 +2324,28 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#picker-tab-printings")?.addEventListener("click", () => setPickerTab("printings"));
   $("#picker-tab-library")?.addEventListener("click",   () => setPickerTab("library"));
   $("#picker-library-filter")?.addEventListener("input", renderPickerLibrary);
+
+  // Quantity stepper inside the picker modal.
+  $("#picker-qty-dec")?.addEventListener("click", () => {
+    if (state.activeIndex === null) return;
+    const cur = state.project.entries[state.activeIndex].quantity;
+    setEntryQuantity(state.activeIndex, cur - 1);
+  });
+  $("#picker-qty-inc")?.addEventListener("click", () => {
+    if (state.activeIndex === null) return;
+    const cur = state.project.entries[state.activeIndex].quantity;
+    setEntryQuantity(state.activeIndex, cur + 1);
+  });
+  $("#picker-qty-input")?.addEventListener("change", (ev) => {
+    if (state.activeIndex === null) return;
+    const v = parseInt(ev.target.value, 10);
+    if (Number.isFinite(v)) setEntryQuantity(state.activeIndex, v);
+    else updatePickerQuantityUI();  // revert bad input
+  });
+  $("#picker-split-btn")?.addEventListener("click", async () => {
+    if (state.activeIndex === null) return;
+    await splitEntry(state.activeIndex);
+  });
   // Backdrop click (outside .picker-modal-header + printings-scroll) closes.
   pickerModal?.addEventListener("click", (ev) => {
     // A click directly on the <dialog> element itself (not a descendant)

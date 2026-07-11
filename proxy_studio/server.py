@@ -111,6 +111,10 @@ class FromScryfallRequest(BaseModel):
     quantity: int = 1
 
 
+class QuantityRequest(BaseModel):
+    quantity: int
+
+
 @dataclass
 class AppState:
     projects_dir: Path
@@ -261,6 +265,19 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
         _entry_at(project, index)  # bounds-check
         del project.entries[index]
         project.save(state.projects_dir)
+
+    @app.post("/api/projects/{name}/entries/{index}/quantity")
+    def set_entry_quantity(name: str, index: int,
+                            req: "QuantityRequest") -> dict[str, Any]:
+        """Set an entry's quantity in-place. 1..999."""
+        if not 1 <= req.quantity <= 999:
+            raise HTTPException(400, "quantity must be between 1 and 999")
+        state: AppState = app.state.picker
+        project = _load(name, state)
+        entry = _entry_at(project, index)
+        entry.quantity = req.quantity
+        project.save(state.projects_dir)
+        return {"ok": True, "entry": _entry_view(entry, state, card=None)}
 
     @app.post("/api/projects/{name}/entries/{index}/duplicate", status_code=201)
     def duplicate_entry(name: str, index: int) -> dict[str, Any]:
