@@ -74,11 +74,21 @@
               <option value="Letter">US Letter</option>
             </select>
           </label>
-          <label id="format-picker" class="chip" title="PDF is print-ready; PNGs give you one high-res image per page (300 DPI) for editing or sharing.">
+          <label id="format-picker" class="chip" title="PDF is print-ready; PNGs give you one image per page for editing or sharing.">
             <span>Format</span>
             <select id="export-format">
               <option value="pdf">PDF</option>
-              <option value="png">PNGs (300 DPI)</option>
+              <option value="png">PNGs</option>
+            </select>
+          </label>
+          <label id="png-dpi-picker" class="chip" title="Resolution of the exported PNGs. Auto matches the upscale Resolution (600 or 1200 DPI). Higher-DPI PNGs are much larger files." hidden>
+            <span>PNG DPI</span>
+            <select id="png-dpi">
+              <option value="auto">Auto</option>
+              <option value="150">150</option>
+              <option value="300">300</option>
+              <option value="600">600</option>
+              <option value="1200">1200</option>
             </select>
           </label>
           <button id="btn-export" class="primary">

@@ -157,6 +157,36 @@ function updateUpscaleLabel() {
   if (label) label.textContent = `${currentDpiTarget()} DPI upscale`;
 }
 
+// --- PNG raster DPI (only relevant when Format=PNGs). "auto" means match
+// the upscale Resolution so a 1200 DPI upscale isn't silently discarded
+// by rendering PNGs at 300 DPI. Persisted per-browser.
+const PNG_DPI_KEY = "relmtgproxy:png-dpi";
+const PNG_DPI_DEFAULT = "auto";
+const PNG_DPI_VALID = new Set(["auto", "150", "300", "600", "1200"]);
+
+function loadPngDpi() {
+  const raw = localStorage.getItem(PNG_DPI_KEY) || "";
+  return PNG_DPI_VALID.has(raw) ? raw : PNG_DPI_DEFAULT;
+}
+function savePngDpi(v) {
+  if (PNG_DPI_VALID.has(v)) localStorage.setItem(PNG_DPI_KEY, v);
+}
+// Resolve the picker's "auto" to a concrete DPI to send to the server.
+// If upscale is off, there's no benefit going past ~300 DPI — the source
+// data isn't there — so auto falls back to 300 in that case.
+function resolvePngDpi() {
+  const sel = $("#png-dpi");
+  const raw = sel?.value || PNG_DPI_DEFAULT;
+  if (raw !== "auto") return parseInt(raw, 10);
+  const upscaleOn = $("#upscale-checkbox")?.checked;
+  return upscaleOn ? currentDpiTarget() : 300;
+}
+function updatePngDpiChipVisibility() {
+  const chip = $("#png-dpi-picker");
+  const format = $("#export-format")?.value || "pdf";
+  if (chip) chip.hidden = format !== "png";
+}
+
 // --- Deck-grid zoom --------------------------------------------------------
 const ZOOM_KEY = "relmtgproxy:deck-columns";
 const ZOOM_MIN = 2;
@@ -2029,6 +2059,11 @@ function runExport() {
     back_offset_x: String(offsetX),
     back_offset_y: String(offsetY),
   });
+  // Only send png_dpi when the user actually asked for PNGs — no point
+  // making the server rasterise a PDF export it isn't going to produce.
+  if (format === "png") {
+    params.set("png_dpi", String(resolvePngDpi()));
+  }
   fetch(`/api/projects/${encodeURIComponent(state.activeProject)}/export?${params}`, {
     method: "POST",
   }).then(async (resp) => {
@@ -2702,6 +2737,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     });
     updateUpscaleLabel();
   }
+
+  // --- PNG DPI (only surfaced when Format=PNG) ---------------------------
+  const pngDpiSel = $("#png-dpi");
+  if (pngDpiSel) {
+    pngDpiSel.value = loadPngDpi();
+    pngDpiSel.addEventListener("change", () => savePngDpi(pngDpiSel.value));
+  }
+  // Toggle chip visibility whenever the Format dropdown changes.
+  $("#export-format")?.addEventListener("change", updatePngDpiChipVisibility);
+  updatePngDpiChipVisibility();
 
   // --- Deck-grid zoom -----------------------------------------------------
   applyZoom(loadZoom());
