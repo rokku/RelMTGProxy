@@ -142,6 +142,82 @@ Prints are laid out 3×3 per sheet at the correct MTG card size
 > gutter to 0 in the toolbar, or scale to fit, if your printer refuses
 > to print that close to the edge.
 
+## Which settings should I use?
+
+The toolbar has a lot of chips, but in practice most people pick one of
+these recipes and stick with it. Skim down; pick the row that matches
+your situation.
+
+### Try-it-out — fastest
+
+| Chip | Setting |
+| --- | --- |
+| Format | PDF |
+| Upscale | **off** (uncheck) |
+| Backs | None |
+| Paper | whatever your printer likes |
+
+Uses Scryfall's native ~300 DPI images. Cards look decent when printed
+and export runs in seconds regardless of deck size. Great for a first
+sanity check before you commit to installing the upscaler.
+
+### Standard proxies for kitchen-table Commander
+
+| Chip | Setting |
+| --- | --- |
+| Format | PDF |
+| Upscale | on, **600 DPI** |
+| Quality | Best (x4plus) |
+| Backs | None or Duplex |
+| Paper | A4 or US Letter |
+
+The sweet spot. Cards look genuinely real once cut. First export runs
+the upscaler over every card (~25 s per card on Apple Silicon or a
+decent Vulkan GPU) — subsequent exports of the same deck are near-
+instant because upscaled images are cached.
+
+### Premium prints for a big event
+
+| Chip | Setting |
+| --- | --- |
+| Format | PDF |
+| Upscale | on, **1200 DPI** |
+| Quality | Best or **Ultramix Balanced** |
+| Backs | Duplex |
+| Paper | A4 or US Letter |
+
+For folks with high-end photo printers. Files are ~4× bigger; the
+extra sharpness only shows on printers that can actually resolve past
+600 DPI on paper. Duplex needs calibration — see
+[card backs](#optional-card-backs), and always test one sheet before
+committing to 100. **Ultramix Balanced** is a community-tuned model
+that's often sharper on illustrated card art; install it from the
+sidebar's **Models** button.
+
+### PNGs for editing or sharing
+
+| Chip | Setting |
+| --- | --- |
+| Format | **PNGs** |
+| PNG DPI | Auto (matches upscale) or explicit (150 / 300 / 600 / 1200) |
+| Upscale | whatever matches your goal |
+
+Each page is written as a standalone PNG. **Auto** passes through
+whatever the upscaler produced — 1200 DPI upscale + Auto = 1200 DPI
+PNGs, so no data gets thrown away. Set an explicit value for small
+previews (150) or archival-size files (1200 regardless of upscale).
+
+### After every export
+
+A thumbnail strip appears at the top of the page, one thumb per PDF
+page. **Click a thumb** for a full-screen zoom, or the small **PDF**
+tag next to it to download **just that page** — handy for reprinting
+after a paper jam, without regenerating the whole deck.
+
+The green download button next to it grabs the full PDF as usual.
+
+---
+
 ## Optional: higher-quality prints (600 DPI or 1200 DPI)
 
 Scryfall's images are ~300 DPI at card size. That looks OK; **600 DPI**
