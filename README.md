@@ -257,6 +257,16 @@ the front marks. Then feed those numbers into the toolbar's "Align" X/Y
 inputs at export time (or pass `--back-offset-x` / `--back-offset-y` on
 the CLI).
 
+> **Always test one sheet before printing a full deck.** Duplex flip
+> isn't perfectly rigid on most home printers — in the maintainer's
+> testing the middle column of a 3×3 grid lands dead-on while the left
+> and right columns can drift by up to ~5 mm. The X offset can only
+> shift the whole back page as one block, so if your printer skews the
+> outer columns you may have to accept a compromise (line up the
+> middle column and tolerate the edges, or line up one edge and let
+> the other drift). Print a single fronts+backs sheet, hold it to a
+> lamp, and decide *before* you commit to 100 pages.
+
 ## Where things end up
 
 - `output/` — every PDF you export, timestamped so you keep a history.
