@@ -157,6 +157,45 @@ function updateUpscaleLabel() {
   if (label) label.textContent = `${currentDpiTarget()} DPI upscale`;
 }
 
+// --- Cut-line style (full lines vs. corner-only trim marks vs. margin
+// ticks). Persisted per-browser like the other export knobs.
+const CUT_LINES_MODE_KEY = "relmtgproxy:cut-lines-mode";
+const CUT_LINES_MODE_DEFAULT = "full";
+const CUT_LINES_MODE_VALID = new Set(["full", "corners", "ticks"]);
+
+function loadCutLinesMode() {
+  const raw = localStorage.getItem(CUT_LINES_MODE_KEY) || "";
+  return CUT_LINES_MODE_VALID.has(raw) ? raw : CUT_LINES_MODE_DEFAULT;
+}
+function saveCutLinesMode(v) {
+  if (CUT_LINES_MODE_VALID.has(v)) localStorage.setItem(CUT_LINES_MODE_KEY, v);
+}
+function currentCutLinesMode() {
+  const sel = $("#cut-lines-mode");
+  const v = sel?.value || CUT_LINES_MODE_DEFAULT;
+  return CUT_LINES_MODE_VALID.has(v) ? v : CUT_LINES_MODE_DEFAULT;
+}
+
+// --- Bleed — extra mm of extended-edge content past each cut line so
+// tiny miscuts don't show white. Uses PIL edge-repeat padding server-
+// side, so the original card image is not scaled. Persisted per-browser.
+const BLEED_KEY = "relmtgproxy:bleed";
+const BLEED_DEFAULT = "0";
+const BLEED_VALID = new Set(["0", "2", "3"]);
+
+function loadBleed() {
+  const raw = localStorage.getItem(BLEED_KEY) || "";
+  return BLEED_VALID.has(raw) ? raw : BLEED_DEFAULT;
+}
+function saveBleed(v) {
+  if (BLEED_VALID.has(v)) localStorage.setItem(BLEED_KEY, v);
+}
+function currentBleed() {
+  const sel = $("#bleed");
+  const v = sel?.value || BLEED_DEFAULT;
+  return BLEED_VALID.has(v) ? v : BLEED_DEFAULT;
+}
+
 // --- Cut-guide colour. Small preset list rather than a colour wheel;
 // the server accepts any #rrggbb via cli.py if a power user wants more.
 const CUT_COLOR_KEY = "relmtgproxy:cut-color";
@@ -2072,11 +2111,14 @@ function runExport() {
   const paper = currentPaper();
   const dpiTarget = currentDpiTarget();
   const cutColor = currentCutColor();
+  const bleed = currentBleed();
   const { x: offsetX, y: offsetY } = currentOffsets();
   const params = new URLSearchParams({
     backs, upscale, quality, format, paper,
     dpi_target: String(dpiTarget),
     cut_color: cutColor,
+    cut_lines: currentCutLinesMode(),
+    bleed,
     back_offset_x: String(offsetX),
     back_offset_y: String(offsetY),
   });
@@ -2473,6 +2515,7 @@ function handleExportEvent(evt, status) {
     status.textContent = `exporting ${data.total} cards${mode}…`;
   } else if (event === "progress") {
     if (data.phase === "render") status.textContent = "rendering PDF…";
+    else if (data.phase === "bleed") status.textContent = "adding bleed…";
     else if (data.phase === "rasterise") status.textContent = "rasterising PNGs…";
     else if (data.phase === "upscale") status.textContent = `upscale ${data.index + 1}/${data.total}: ${data.name}`;
     else if (data.phase === "back") status.textContent = `back ${data.index + 1}/${data.total}: ${data.name}`;
@@ -2836,6 +2879,20 @@ window.addEventListener("DOMContentLoaded", async () => {
   if (cutColorSel) {
     cutColorSel.value = loadCutColor();
     cutColorSel.addEventListener("change", () => saveCutColor(cutColorSel.value));
+  }
+
+  // --- Cut-line style ---------------------------------------------------
+  const cutLinesSel = $("#cut-lines-mode");
+  if (cutLinesSel) {
+    cutLinesSel.value = loadCutLinesMode();
+    cutLinesSel.addEventListener("change", () => saveCutLinesMode(cutLinesSel.value));
+  }
+
+  // --- Bleed dropdown ---------------------------------------------------
+  const bleedSel = $("#bleed");
+  if (bleedSel) {
+    bleedSel.value = loadBleed();
+    bleedSel.addEventListener("change", () => saveBleed(bleedSel.value));
   }
 
   // --- Deck-grid zoom -----------------------------------------------------

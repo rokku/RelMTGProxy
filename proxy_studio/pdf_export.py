@@ -19,6 +19,7 @@ is how you measure that drift.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
@@ -31,6 +32,18 @@ from reportlab.lib.pagesizes import A4, LETTER
 from . import layout as L
 
 log = logging.getLogger(__name__)
+
+# libpdfium's font mapper (CFX_FontMapper) is not thread-safe on macOS —
+# concurrent calls to `PdfDocument(...).get_page(...)` race inside the
+# font enumeration and double-free a shared vector, aborting the process
+# with "pointer being freed was not allocated". This lock serialises
+# every pypdfium2 entry point in this module.
+#
+# When the UI's PDF preview strip renders 9 <img> tags at once, the
+# browser fires 6-8 parallel requests to /api/pdf-preview, each of
+# which enters pypdfium2 on its own anyio worker thread. Without this
+# lock, the server aborts a few seconds after "done" fires.
+_PDFIUM_LOCK = threading.Lock()
 
 BacksMode = Literal["none", "duplex", "separate"]
 
@@ -62,12 +75,21 @@ def render_pdf(cards: Sequence[RenderCard], out_path: str | Path,
                cut_color: tuple[float, float, float] = DEFAULT_CUT_COLOR,
                cut_line_width_mm: float = 0.15,
                dpi_warn: float = 550.0,
-               dpi_fail: float = 290.0) -> tuple[Path, Path | None]:
+               dpi_fail: float = 290.0,
+               already_bled: bool = False) -> tuple[Path, Path | None]:
     """Render the fronts (and optionally the backs) into `out_path`.
 
     Returns `(fronts_pdf, backs_pdf_or_none)`. In `duplex` mode `backs_pdf`
     is None because everything is interleaved into the fronts file. In
     `separate` mode `backs_pdf` is `{stem}_backs.pdf` next to `out_path`.
+
+    `already_bled=True` tells the draw path to skip on-the-fly bleed
+    generation and treat each card's `image_path` (and `back_image_path`)
+    as already carrying `spec.bleed_mm` of edge padding. Callers that
+    need to keep PIL work out of this function (e.g. because they're
+    calling `render_pdf` from a threadpool worker under an event loop)
+    should pre-generate bled versions with `_get_bled_image` and pass
+    `already_bled=True`.
     """
     spec = spec or L.PageSpec()
     out_path = Path(out_path)
@@ -86,7 +108,8 @@ def render_pdf(cards: Sequence[RenderCard], out_path: str | Path,
                   interleave=True,
                   cut_color=cut_color, cut_line_width_mm=cut_line_width_mm,
                   dpi_warn=dpi_warn, dpi_fail=dpi_fail,
-                  project_name=project_name)
+                  project_name=project_name,
+                  already_bled=already_bled)
         c.save()
         return out_path, None
 
@@ -96,7 +119,8 @@ def render_pdf(cards: Sequence[RenderCard], out_path: str | Path,
               back_offset=(0.0, 0.0), interleave=False,
               cut_color=cut_color, cut_line_width_mm=cut_line_width_mm,
               dpi_warn=dpi_warn, dpi_fail=dpi_fail,
-              project_name=project_name)
+              project_name=project_name,
+              already_bled=already_bled)
     c.save()
 
     if backs_mode == "none":
@@ -112,9 +136,16 @@ def render_pdf(cards: Sequence[RenderCard], out_path: str | Path,
               interleave=False, only_backs=True,
               cut_color=cut_color, cut_line_width_mm=cut_line_width_mm,
               dpi_warn=dpi_warn, dpi_fail=dpi_fail,
-              project_name=f"{project_name} (backs)")
+              project_name=f"{project_name} (backs)",
+              already_bled=already_bled)
     cb.save()
     return out_path, backs_path
+
+
+def bleed_image(src: str | Path, bleed_mm: float) -> Path:
+    """Public wrapper around `_get_bled_image` — callers pre-generating
+    bleed for use with `render_pdf(already_bled=True)`."""
+    return _get_bled_image(Path(src), bleed_mm)
 
 
 # Back-compat alias — existing callers use `render_fronts_pdf(...)`.
@@ -141,7 +172,7 @@ def _draw_all(c: canvas.Canvas,
               interleave: bool,
               only_backs: bool = False,
               cut_color, cut_line_width_mm, dpi_warn, dpi_fail,
-              project_name) -> None:
+              project_name, already_bled: bool = False) -> None:
     """Draw fronts and/or backs into an existing canvas."""
     front_slots = L.page_slots(spec)
     back_slots = L.mirror_slots_for_back(front_slots, spec, flip_edge=flip_edge)
@@ -152,11 +183,19 @@ def _draw_all(c: canvas.Canvas,
         # Front page (unless we're rendering only backs into a separate file).
         if not only_backs:
             page_no += 1
-            _draw_cut_marks(c, spec, occupied=len(chunk),
-                            color=cut_color, width_mm=cut_line_width_mm)
+            # Images first, guides second: with bleed on, the bleed area
+            # fills the gutter, so guides drawn before images would be
+            # hidden by them. Drawing guides last keeps them visible over
+            # both the card face and the bleed area — hair-thin lines
+            # (0.15 mm default) on the card face are effectively invisible
+            # during play but sharp for cutting.
             for i, card in enumerate(chunk):
                 _draw_card(c, card.image_path, front_slots[i], card.name,
-                           dpi_warn=dpi_warn, dpi_fail=dpi_fail)
+                           dpi_warn=dpi_warn, dpi_fail=dpi_fail,
+                           bleed_mm=spec.bleed_mm,
+                           already_bled=already_bled)
+            _draw_cut_marks(c, spec, occupied=len(chunk),
+                            color=cut_color, width_mm=cut_line_width_mm)
             _draw_footer(c, spec, project_name, page_no, total_pages,
                           suffix="")
             c.showPage()
@@ -164,11 +203,6 @@ def _draw_all(c: canvas.Canvas,
         # Back page: always drawn if backs is True (interleave OR only_backs).
         if backs:
             page_no += 1
-            # Cut lines shift with the back-page content so they still align
-            # with the back-image edges after any offset compensation.
-            _draw_cut_marks(c, spec, occupied=len(chunk),
-                            color=cut_color, width_mm=cut_line_width_mm,
-                            offset_mm=back_offset)
             for i, card in enumerate(chunk):
                 if card.back_image_path is None:
                     raise ValueError(
@@ -177,7 +211,14 @@ def _draw_all(c: canvas.Canvas,
                     )
                 slot = _apply_offset(back_slots[i], back_offset)
                 _draw_card(c, card.back_image_path, slot, card.name,
-                           dpi_warn=dpi_warn, dpi_fail=dpi_fail)
+                           dpi_warn=dpi_warn, dpi_fail=dpi_fail,
+                           bleed_mm=spec.bleed_mm,
+                           already_bled=already_bled)
+            # Cut lines shift with the back-page content so they still align
+            # with the back-image edges after any offset compensation.
+            _draw_cut_marks(c, spec, occupied=len(chunk),
+                            color=cut_color, width_mm=cut_line_width_mm,
+                            offset_mm=back_offset)
             _draw_footer(c, spec, project_name, page_no, total_pages,
                           suffix=" (back)")
             c.showPage()
@@ -189,14 +230,114 @@ def _apply_offset(slot: L.SlotRect, offset: tuple[float, float]) -> L.SlotRect:
 
 
 def _draw_card(c: canvas.Canvas, image_path: Path, slot: L.SlotRect,
-                name: str, *, dpi_warn: float, dpi_fail: float) -> None:
+                name: str, *, dpi_warn: float, dpi_fail: float,
+                bleed_mm: float = 0.0, already_bled: bool = False) -> None:
+    """Draw one card at its slot.
+
+    With `bleed_mm > 0`, `image_path` is expected to be a version of the
+    source that has already been padded with `bleed_mm` of edge-colour
+    pixels — the padded image is drawn at `(63 + 2*bleed) × (88 + 2*bleed)`
+    mm centred on the slot, so the outer `bleed_mm` on each edge is
+    entirely made of the added pixels.
+
+    If `already_bled` is False (default), the padded version is generated
+    on demand via `_get_bled_image`. Callers that want to avoid PIL work
+    inside the reportlab draw loop should pre-generate the padded image
+    themselves and pass `already_bled=True`.
+
+    Cut guides continue to sit at the true 63×88 mm boundary regardless.
+    """
     _check_dpi(image_path, name, dpi_warn=dpi_warn, dpi_fail=dpi_fail)
-    c.drawImage(
-        str(image_path),
-        x=slot.x_mm * mm, y=slot.y_mm * mm,
-        width=L.CARD_W_MM * mm, height=L.CARD_H_MM * mm,
-        preserveAspectRatio=False, mask="auto",
-    )
+    if bleed_mm > 0:
+        if not already_bled:
+            image_path = _get_bled_image(image_path, bleed_mm)
+        c.drawImage(
+            str(image_path),
+            x=(slot.x_mm - bleed_mm) * mm,
+            y=(slot.y_mm - bleed_mm) * mm,
+            width=(L.CARD_W_MM + 2 * bleed_mm) * mm,
+            height=(L.CARD_H_MM + 2 * bleed_mm) * mm,
+            preserveAspectRatio=False, mask="auto",
+        )
+    else:
+        c.drawImage(
+            str(image_path),
+            x=slot.x_mm * mm, y=slot.y_mm * mm,
+            width=L.CARD_W_MM * mm, height=L.CARD_H_MM * mm,
+            preserveAspectRatio=False, mask="auto",
+        )
+
+
+BLED_CACHE_DIR = Path("cache/images/bled")
+
+
+def _get_bled_image(src: Path, bleed_mm: float,
+                    card_w_mm: float = L.CARD_W_MM,
+                    card_h_mm: float = L.CARD_H_MM) -> Path:
+    """Return path to a copy of `src` with `bleed_mm` of edge-repeat
+    padding on all sides. Cached under `cache/images/bled/`.
+
+    Edge repeat: each side's outer 1-pixel strip is stretched outward
+    to fill the bleed area (a.k.a. "clamp"). The four corners get
+    filled with the single corner pixel colour. For black-bordered
+    cards the outer strip is uniform black, so the extension looks
+    like a natural continuation of the border. For full-art or
+    borderless cards the extension matches whatever colour was at
+    the very edge of the source pixel — a visually smoother result
+    than filling with an averaged corner colour.
+    """
+    import hashlib
+    BLED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    src = Path(src)
+    try:
+        key_src = str(src.resolve())
+    except OSError:
+        key_src = str(src)
+    # `v2` in the key so switching from the old solid-fill implementation
+    # invalidates any pre-existing cache entries automatically.
+    key = hashlib.sha1(f"v2:{key_src}:{bleed_mm}".encode("utf-8")).hexdigest()[:16]
+    out = BLED_CACHE_DIR / f"{key}.png"
+    if out.exists() and out.stat().st_size > 0:
+        return out
+
+    from PIL import Image
+    with Image.open(src) as im:
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGB")
+        w, h = im.size
+        # mm→px based on the source image at standard card dimensions.
+        bleed_px_x = max(1, int(round(bleed_mm * (w / card_w_mm))))
+        bleed_px_y = max(1, int(round(bleed_mm * (h / card_h_mm))))
+        new_w = w + 2 * bleed_px_x
+        new_h = h + 2 * bleed_px_y
+        extended = Image.new(im.mode, (new_w, new_h))
+        # Paste the original into the centre first.
+        extended.paste(im, (bleed_px_x, bleed_px_y))
+        # Edge strips: stretch a 1-px slice outward with default NEAREST
+        # so the extension is exactly the edge colour repeated (no
+        # anti-alias smear).
+        top = im.crop((0, 0, w, 1)).resize((w, bleed_px_y))
+        extended.paste(top, (bleed_px_x, 0))
+        bot = im.crop((0, h - 1, w, h)).resize((w, bleed_px_y))
+        extended.paste(bot, (bleed_px_x, h + bleed_px_y))
+        left = im.crop((0, 0, 1, h)).resize((bleed_px_x, h))
+        extended.paste(left, (0, bleed_px_y))
+        right = im.crop((w - 1, 0, w, h)).resize((bleed_px_x, h))
+        extended.paste(right, (w + bleed_px_x, bleed_px_y))
+        # Corners: fill the corner square with the single corner pixel.
+        for src_x, src_y, dst_x, dst_y in [
+            (0, 0, 0, 0),
+            (w - 1, 0, w + bleed_px_x, 0),
+            (0, h - 1, 0, h + bleed_px_y),
+            (w - 1, h - 1, w + bleed_px_x, h + bleed_px_y),
+        ]:
+            corner = im.crop((src_x, src_y, src_x + 1, src_y + 1))
+            corner = corner.resize((bleed_px_x, bleed_px_y))
+            extended.paste(corner, (dst_x, dst_y))
+        tmp = out.with_suffix(f".{hashlib.sha1(str(out).encode()).hexdigest()[:8]}.tmp")
+        extended.save(tmp, format="PNG")
+        tmp.replace(out)
+    return out
 
 
 def _draw_cut_marks(c: canvas.Canvas, spec: L.PageSpec, *, occupied: int,
@@ -331,11 +472,12 @@ def render_registration_test(out_path: str | Path, *,
 def pdf_page_count(pdf_path: str | Path) -> int:
     """Return the number of pages in a PDF."""
     import pypdfium2 as pdfium
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    try:
-        return len(pdf)
-    finally:
-        pdf.close()
+    with _PDFIUM_LOCK:
+        pdf = pdfium.PdfDocument(str(pdf_path))
+        try:
+            return len(pdf)
+        finally:
+            pdf.close()
 
 
 def extract_pdf_page_bytes(pdf_path: str | Path, page_index: int) -> bytes:
@@ -346,17 +488,18 @@ def extract_pdf_page_bytes(pdf_path: str | Path, page_index: int) -> bytes:
     """
     import io
     import pypdfium2 as pdfium
-    src = pdfium.PdfDocument(str(pdf_path))
-    try:
-        if not 0 <= page_index < len(src):
-            raise IndexError(f"page {page_index} out of range (pdf has {len(src)} pages)")
-        dst = pdfium.PdfDocument.new()
-        dst.import_pages(src, [page_index])
-        buf = io.BytesIO()
-        dst.save(buf)
-        return buf.getvalue()
-    finally:
-        src.close()
+    with _PDFIUM_LOCK:
+        src = pdfium.PdfDocument(str(pdf_path))
+        try:
+            if not 0 <= page_index < len(src):
+                raise IndexError(f"page {page_index} out of range (pdf has {len(src)} pages)")
+            dst = pdfium.PdfDocument.new()
+            dst.import_pages(src, [page_index])
+            buf = io.BytesIO()
+            dst.save(buf)
+            return buf.getvalue()
+        finally:
+            src.close()
 
 
 def render_pdf_page_to_png_bytes(pdf_path: str | Path, page_index: int, *,
@@ -365,21 +508,22 @@ def render_pdf_page_to_png_bytes(pdf_path: str | Path, page_index: int, *,
     import io
     import pypdfium2 as pdfium
     scale = dpi / 72.0
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    try:
-        if not 0 <= page_index < len(pdf):
-            raise IndexError(f"page {page_index} out of range (pdf has {len(pdf)} pages)")
-        page = pdf.get_page(page_index)
+    with _PDFIUM_LOCK:
+        pdf = pdfium.PdfDocument(str(pdf_path))
         try:
-            bitmap = page.render(scale=scale, rev_byteorder=True)
-            image = bitmap.to_pil()
+            if not 0 <= page_index < len(pdf):
+                raise IndexError(f"page {page_index} out of range (pdf has {len(pdf)} pages)")
+            page = pdf.get_page(page_index)
+            try:
+                bitmap = page.render(scale=scale, rev_byteorder=True)
+                image = bitmap.to_pil()
+            finally:
+                page.close()
+            buf = io.BytesIO()
+            image.save(buf, format="PNG")
+            return buf.getvalue()
         finally:
-            page.close()
-        buf = io.BytesIO()
-        image.save(buf, format="PNG")
-        return buf.getvalue()
-    finally:
-        pdf.close()
+            pdf.close()
 
 
 def rasterise_pdf_to_pngs(pdf_path: str | Path, *,
@@ -404,21 +548,22 @@ def rasterise_pdf_to_pngs(pdf_path: str | Path, *,
     target_dir.mkdir(parents=True, exist_ok=True)
     scale = dpi / 72.0  # 1 PDF canvas unit == 1/72 inch
     out_paths: list[Path] = []
-    pdf = pdfium.PdfDocument(str(pdf_path))
-    try:
-        for i in range(len(pdf)):
-            page = pdf.get_page(i)
-            try:
-                bitmap = page.render(scale=scale, rev_byteorder=True)
-                image = bitmap.to_pil()
-            finally:
-                page.close()
-            out = target_dir / f"{pdf_path.stem}_p{i + 1:0{suffix_width}d}.png"
-            # optimize=True quadruples encode time for a ~4% size win — skip it.
-            image.save(out, format="PNG")
-            out_paths.append(out)
-    finally:
-        pdf.close()
+    with _PDFIUM_LOCK:
+        pdf = pdfium.PdfDocument(str(pdf_path))
+        try:
+            for i in range(len(pdf)):
+                page = pdf.get_page(i)
+                try:
+                    bitmap = page.render(scale=scale, rev_byteorder=True)
+                    image = bitmap.to_pil()
+                finally:
+                    page.close()
+                out = target_dir / f"{pdf_path.stem}_p{i + 1:0{suffix_width}d}.png"
+                # optimize=True quadruples encode time for a ~4% size win — skip it.
+                image.save(out, format="PNG")
+                out_paths.append(out)
+        finally:
+            pdf.close()
     return out_paths
 
 

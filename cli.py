@@ -418,6 +418,7 @@ def cmd_pick(args: argparse.Namespace) -> int:
     deep-links via `#project=NAME` in the URL fragment so the UI opens that
     project directly.
     """
+    import faulthandler
     import threading
     import time
     import webbrowser
@@ -425,6 +426,11 @@ def cmd_pick(args: argparse.Namespace) -> int:
     import uvicorn
 
     from proxy_studio.server import create_app
+
+    # If the process aborts from a native crash (segfault / malloc
+    # error), dump every thread's Python stack to stderr so we can
+    # tell WHERE the crash came from rather than just the abort code.
+    faulthandler.enable()
 
     if args.project:
         # Verify the project exists so we fail fast rather than serving a

@@ -20,7 +20,7 @@ PAPERS_MM: dict[str, tuple[float, float]] = {
 }
 
 FlipEdge = Literal["long", "short"]
-CutLineMode = Literal["ticks", "full"]
+CutLineMode = Literal["ticks", "full", "corners"]
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,13 @@ class PageSpec:
     # "full" draws page-edge-to-page-edge cut guides through the gutters.
     # "ticks" restricts guides to the margins only (spec §8 original mode).
     cut_line_mode: CutLineMode = "full"
+    # Extra mm of extended-edge content drawn past each card edge. Bleed
+    # is applied by adding pixels around each card image (edge-colour
+    # padding via PIL) — the original image is not scaled, so its
+    # geometry is preserved. Cut lines still sit at the true 63×88 mm
+    # boundaries. Requires `gutter_mm >= 2*bleed` so adjacent cards'
+    # bleeds don't overlap — enforced upstream by the export endpoint.
+    bleed_mm: float = 0.0
 
     @property
     def page_size_mm(self) -> tuple[float, float]:
@@ -272,13 +279,65 @@ def cut_lines_full(spec: PageSpec,
     return lines
 
 
+def cut_corner_marks(spec: PageSpec,
+                     occupied_slot_count: int | None = None,
+                     arm_mm: float = 3.5,
+                     inset_mm: float = 0.5) -> list[CutTick]:
+    """Small L-shaped trim marks at each card corner.
+
+    Each corner emits two short segments (one horizontal, one vertical)
+    extending *outward* from the corner into the surrounding gutter or
+    page margin. The segments start `inset_mm` past the corner (so they
+    don't touch the card face) and are `arm_mm` long — a classic
+    print-shop trim mark. Adjacent cards share their inward-facing
+    marks: with a 6 mm gutter and 3.5 mm arms, the interior marks fit
+    entirely inside the gutter without crossing either card.
+
+    Skips cards whose corners would sit past the occupied slot range,
+    so an odd final page doesn't grow phantom marks below its last row.
+    """
+    slots = page_slots(spec)
+    if occupied_slot_count is None:
+        occupied = list(range(spec.slots_per_page))
+    else:
+        occupied = list(range(min(occupied_slot_count, spec.slots_per_page)))
+
+    ticks: list[CutTick] = []
+    for i in occupied:
+        s = slots[i]
+        left, right = s.x_mm, s.x_mm + s.w_mm
+        bottom, top = s.y_mm, s.y_mm + s.h_mm
+        # For each of the 4 corners: horizontal arm goes away from the
+        # card in the X direction, vertical arm goes away in the Y
+        # direction. Both start `inset_mm` past the corner in that
+        # direction so a small gap separates the mark from the card
+        # face — makes cutting on the corner unambiguous.
+        for (corner_x, corner_y, dx, dy) in [
+            (left,  top,    -1,  1),   # top-left
+            (right, top,     1,  1),   # top-right
+            (left,  bottom, -1, -1),   # bottom-left
+            (right, bottom,  1, -1),   # bottom-right
+        ]:
+            # Horizontal arm (extends in dx direction, at height y).
+            x_start = corner_x + dx * inset_mm
+            x_end = corner_x + dx * (inset_mm + arm_mm)
+            ticks.append(CutTick(x_start, corner_y, x_end, corner_y))
+            # Vertical arm (extends in dy direction, at column x).
+            y_start = corner_y + dy * inset_mm
+            y_end = corner_y + dy * (inset_mm + arm_mm)
+            ticks.append(CutTick(corner_x, y_start, corner_x, y_end))
+    return ticks
+
+
 def cut_marks(spec: PageSpec,
               occupied_slot_count: int | None = None) -> list[CutTick]:
-    """Dispatch to `cut_ticks` or `cut_lines_full` based on `spec.cut_line_mode`."""
+    """Dispatch to the right cut-guide generator for the mode."""
     if spec.cut_line_mode == "ticks":
         return cut_ticks(spec, occupied_slot_count)
     if spec.cut_line_mode == "full":
         return cut_lines_full(spec, occupied_slot_count)
+    if spec.cut_line_mode == "corners":
+        return cut_corner_marks(spec, occupied_slot_count)
     raise ValueError(f"Unknown cut_line_mode: {spec.cut_line_mode!r}")
 
 

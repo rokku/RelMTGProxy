@@ -43,7 +43,7 @@ from . import scryfall as SF
 from . import upscale as UP
 from .layout import PageSpec
 from .pdf_export import (
-    DEFAULT_CUT_COLOR, RenderCard, default_output_path,
+    DEFAULT_CUT_COLOR, RenderCard, bleed_image, default_output_path,
     extract_pdf_page_bytes, parse_hex_color,
     pdf_page_count, rasterise_pdf_to_pngs, render_pdf,
     render_pdf_page_to_png_bytes, render_registration_test,
@@ -702,9 +702,11 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
                     format: str = "pdf",
                     png_dpi: int = 300,
                     paper: str = "A4",
-                    dpi_target: int = 600) -> StreamingResponse:
-        if cut_lines not in ("full", "ticks"):
-            raise HTTPException(400, "cut_lines must be 'full' or 'ticks'")
+                    dpi_target: int = 600,
+                    bleed: float = 0.0) -> StreamingResponse:
+        if cut_lines not in ("full", "ticks", "corners"):
+            raise HTTPException(400,
+                "cut_lines must be 'full', 'ticks' or 'corners'")
         if backs not in ("none", "duplex", "separate"):
             raise HTTPException(400, "backs must be 'none', 'duplex' or 'separate'")
         if flip_edge not in ("long", "short"):
@@ -718,6 +720,8 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
             raise HTTPException(400, "png_dpi must be between 72 and 1200")
         if dpi_target not in (600, 1200):
             raise HTTPException(400, "dpi_target must be 600 or 1200")
+        if not 0.0 <= bleed <= 10.0:
+            raise HTTPException(400, "bleed must be between 0 and 10 mm")
         from .layout import PAPERS_MM
         if paper not in PAPERS_MM:
             raise HTTPException(400,
@@ -728,7 +732,13 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
             raise HTTPException(400, f"cut_color: {e}") from e
         state: AppState = app.state.picker
         project_name = _validate_name(name)
-        spec = PageSpec(paper=paper, gutter_mm=gutter, cut_line_mode=cut_lines)  # type: ignore[arg-type]
+        # Bleed extends into the gutter — auto-widen the gutter to
+        # `2*bleed` so adjacent cards' bleeds don't overlap. The user
+        # doesn't have to remember the constraint.
+        effective_gutter = max(gutter, 2 * bleed) if bleed > 0 else gutter
+        spec = PageSpec(paper=paper, gutter_mm=effective_gutter,
+                         cut_line_mode=cut_lines,
+                         bleed_mm=bleed)  # type: ignore[arg-type]
         want_upscale = UP.any_backend_installed() if upscale is None else upscale
         return StreamingResponse(
             _export_stream(state, project_name=project_name, spec=spec,
@@ -1751,6 +1761,30 @@ async def _export_stream(state: AppState, *, project_name: str,
                                             quantity=entry.quantity,
                                             back_image_path=back_path))
 
+        # Pre-generate bleed padding (if enabled) here, synchronously,
+        # inside the async task. Deliberately NOT using
+        # `asyncio.to_thread`: Pillow 12 on Python 3.14 has been
+        # observed to trigger malloc double-free / heap corruption when
+        # called from asyncio's threadpool workers alongside a
+        # StreamingResponse. Blocking the event loop for a few seconds
+        # is acceptable for a local single-user server.
+        if spec.bleed_mm > 0:
+            yield _sse("progress", {"index": total, "total": total,
+                                    "name": "", "phase": "bleed"})
+            new_cards: list[RenderCard] = []
+            for rc in render_cards:
+                front_bled = bleed_image(rc.image_path, spec.bleed_mm)
+                back_bled: Path | None = None
+                if rc.back_image_path is not None:
+                    back_bled = bleed_image(rc.back_image_path, spec.bleed_mm)
+                new_cards.append(RenderCard(
+                    image_path=front_bled,
+                    name=rc.name,
+                    quantity=rc.quantity,
+                    back_image_path=back_bled,
+                ))
+            render_cards = new_cards
+
         yield _sse("progress", {"index": total, "total": total,
                                 "name": "", "phase": "render"})
 
@@ -1772,6 +1806,9 @@ async def _export_stream(state: AppState, *, project_name: str,
                 # We already ran the DPI gate per-image above; keep the
                 # render's own gate loose so it doesn't second-guess us.
                 dpi_warn=290.0, dpi_fail=0.0,
+                # Skip PIL work inside the threadpool worker — bleed
+                # padding was pre-generated above.
+                already_bled=spec.bleed_mm > 0,
             )
 
         fronts_path, backs_path = None, None
