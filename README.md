@@ -142,18 +142,10 @@ but if you find it hard to see under your cutting lamp or on a busy
 card face, pick Black / Red / Magenta / Grey from the **Guides**
 dropdown in the toolbar.
 
-**Bleed** (extra image around each card that extends past the cut
-line) is off by default and can be set to **2 mm** or **3 mm**
-(industry-standard) via the **Bleed** dropdown. With bleed on, a
-1 mm miscut on any edge just shows more art or border rather than a
-white sliver. Turning bleed on automatically widens the gutter so
-adjacent cards' bleeds don't overlap.
-
 > **Letter users, heads-up:** at the default 3 mm gutter, Letter leaves
 > only ~4.7 mm top/bottom margin — most printers will clip. Drop the
 > gutter to 0 in the toolbar, or scale to fit, if your printer refuses
-> to print that close to the edge. Turning bleed on tightens margins
-> further.
+> to print that close to the edge.
 
 ## Which settings should I use?
 

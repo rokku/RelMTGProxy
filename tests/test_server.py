@@ -444,38 +444,6 @@ class TestRegistrationTestEndpoint:
         assert r.status_code == 400
 
 
-class TestExportBleed:
-    """Guard rails on the new bleed param — validates range + confirms
-    the endpoint doesn't blow up when the option is exercised."""
-
-    def _make_project(self, client):
-        r = client.post("/api/projects",
-                        json={"name": "bleed-test", "decklist": ""})
-        assert r.status_code == 201
-
-    def test_bleed_zero_is_accepted(self, client):
-        self._make_project(client)
-        r = client.post("/api/projects/bleed-test/export",
-                        params={"bleed": "0", "upscale": "false"})
-        assert r.status_code == 200
-
-    def test_bleed_three_is_accepted(self, client):
-        self._make_project(client)
-        r = client.post("/api/projects/bleed-test/export",
-                        params={"bleed": "3", "upscale": "false"})
-        assert r.status_code == 200
-
-    def test_negative_bleed_rejected(self, client):
-        self._make_project(client)
-        r = client.post("/api/projects/bleed-test/export",
-                        params={"bleed": "-1", "upscale": "false"})
-        assert r.status_code == 400
-
-    def test_absurd_bleed_rejected(self, client):
-        self._make_project(client)
-        r = client.post("/api/projects/bleed-test/export",
-                        params={"bleed": "50", "upscale": "false"})
-        assert r.status_code == 400
 
 
 class TestNameValidation:

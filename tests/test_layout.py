@@ -69,18 +69,6 @@ class TestPageSpec:
         with pytest.raises(ValueError):
             _ = PageSpec(paper="B0").page_size_mm
 
-    def test_bleed_defaults_to_zero(self):
-        # Existing exports must not silently start growing images.
-        assert PageSpec().bleed_mm == 0.0
-
-    def test_bleed_is_carried_by_spec(self):
-        spec = PageSpec(bleed_mm=3.0, gutter_mm=6.0)
-        assert spec.bleed_mm == 3.0
-        # Bleed doesn't change the grid geometry — the cut lines still sit
-        # at the true card edges; only the drawn image extends past them.
-        assert approx(spec.grid_size_mm[0], 3 * 63 + 2 * 6)   # 201
-        assert approx(spec.grid_size_mm[1], 3 * 88 + 2 * 6)   # 276
-
 
 class TestPageSlots:
     def test_reading_order_top_left_first(self):

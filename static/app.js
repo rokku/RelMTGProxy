@@ -157,25 +157,6 @@ function updateUpscaleLabel() {
   if (label) label.textContent = `${currentDpiTarget()} DPI upscale`;
 }
 
-// --- Bleed — extra mm of card art past each cut line so tiny miscuts
-// don't show white. Persisted per-browser.
-const BLEED_KEY = "relmtgproxy:bleed";
-const BLEED_DEFAULT = "0";
-const BLEED_VALID = new Set(["0", "2", "3"]);
-
-function loadBleed() {
-  const raw = localStorage.getItem(BLEED_KEY) || "";
-  return BLEED_VALID.has(raw) ? raw : BLEED_DEFAULT;
-}
-function saveBleed(v) {
-  if (BLEED_VALID.has(v)) localStorage.setItem(BLEED_KEY, v);
-}
-function currentBleed() {
-  const sel = $("#bleed");
-  const v = sel?.value || BLEED_DEFAULT;
-  return BLEED_VALID.has(v) ? v : BLEED_DEFAULT;
-}
-
 // --- Cut-guide colour. Small preset list rather than a colour wheel;
 // the server accepts any #rrggbb via cli.py if a power user wants more.
 const CUT_COLOR_KEY = "relmtgproxy:cut-color";
@@ -2090,13 +2071,11 @@ function runExport() {
   const format = $("#export-format")?.value || "pdf";
   const paper = currentPaper();
   const dpiTarget = currentDpiTarget();
-  const bleed = currentBleed();
   const cutColor = currentCutColor();
   const { x: offsetX, y: offsetY } = currentOffsets();
   const params = new URLSearchParams({
     backs, upscale, quality, format, paper,
     dpi_target: String(dpiTarget),
-    bleed,
     cut_color: cutColor,
     back_offset_x: String(offsetX),
     back_offset_y: String(offsetY),
@@ -2851,13 +2830,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   // PNG folder hint — copy button. The hint element itself is shown/hidden
   // by the export done handler.
   $("#png-folder-copy")?.addEventListener("click", copyPngFolderPath);
-
-  // --- Bleed dropdown ---------------------------------------------------
-  const bleedSel = $("#bleed");
-  if (bleedSel) {
-    bleedSel.value = loadBleed();
-    bleedSel.addEventListener("change", () => saveBleed(bleedSel.value));
-  }
 
   // --- Cut-guide colour -------------------------------------------------
   const cutColorSel = $("#cut-color");

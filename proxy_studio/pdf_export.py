@@ -156,8 +156,7 @@ def _draw_all(c: canvas.Canvas,
                             color=cut_color, width_mm=cut_line_width_mm)
             for i, card in enumerate(chunk):
                 _draw_card(c, card.image_path, front_slots[i], card.name,
-                           dpi_warn=dpi_warn, dpi_fail=dpi_fail,
-                           bleed_mm=spec.bleed_mm)
+                           dpi_warn=dpi_warn, dpi_fail=dpi_fail)
             _draw_footer(c, spec, project_name, page_no, total_pages,
                           suffix="")
             c.showPage()
@@ -178,8 +177,7 @@ def _draw_all(c: canvas.Canvas,
                     )
                 slot = _apply_offset(back_slots[i], back_offset)
                 _draw_card(c, card.back_image_path, slot, card.name,
-                           dpi_warn=dpi_warn, dpi_fail=dpi_fail,
-                           bleed_mm=spec.bleed_mm)
+                           dpi_warn=dpi_warn, dpi_fail=dpi_fail)
             _draw_footer(c, spec, project_name, page_no, total_pages,
                           suffix=" (back)")
             c.showPage()
@@ -191,19 +189,12 @@ def _apply_offset(slot: L.SlotRect, offset: tuple[float, float]) -> L.SlotRect:
 
 
 def _draw_card(c: canvas.Canvas, image_path: Path, slot: L.SlotRect,
-                name: str, *, dpi_warn: float, dpi_fail: float,
-                bleed_mm: float = 0.0) -> None:
-    """Draw one card at its slot. With `bleed_mm > 0` the image is drawn
-    at `(63 + 2*bleed) x (88 + 2*bleed)` mm centred on the slot, so the
-    outer `bleed_mm` on each edge extends past the cut line. Cut lines
-    themselves are drawn separately at the true 63x88 boundary."""
+                name: str, *, dpi_warn: float, dpi_fail: float) -> None:
     _check_dpi(image_path, name, dpi_warn=dpi_warn, dpi_fail=dpi_fail)
     c.drawImage(
         str(image_path),
-        x=(slot.x_mm - bleed_mm) * mm,
-        y=(slot.y_mm - bleed_mm) * mm,
-        width=(L.CARD_W_MM + 2 * bleed_mm) * mm,
-        height=(L.CARD_H_MM + 2 * bleed_mm) * mm,
+        x=slot.x_mm * mm, y=slot.y_mm * mm,
+        width=L.CARD_W_MM * mm, height=L.CARD_H_MM * mm,
         preserveAspectRatio=False, mask="auto",
     )
 
