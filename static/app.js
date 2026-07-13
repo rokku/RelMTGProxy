@@ -157,6 +157,44 @@ function updateUpscaleLabel() {
   if (label) label.textContent = `${currentDpiTarget()} DPI upscale`;
 }
 
+// --- Bleed — extra mm of card art past each cut line so tiny miscuts
+// don't show white. Persisted per-browser.
+const BLEED_KEY = "relmtgproxy:bleed";
+const BLEED_DEFAULT = "0";
+const BLEED_VALID = new Set(["0", "2", "3"]);
+
+function loadBleed() {
+  const raw = localStorage.getItem(BLEED_KEY) || "";
+  return BLEED_VALID.has(raw) ? raw : BLEED_DEFAULT;
+}
+function saveBleed(v) {
+  if (BLEED_VALID.has(v)) localStorage.setItem(BLEED_KEY, v);
+}
+function currentBleed() {
+  const sel = $("#bleed");
+  const v = sel?.value || BLEED_DEFAULT;
+  return BLEED_VALID.has(v) ? v : BLEED_DEFAULT;
+}
+
+// --- Cut-guide colour. Small preset list rather than a colour wheel;
+// the server accepts any #rrggbb via cli.py if a power user wants more.
+const CUT_COLOR_KEY = "relmtgproxy:cut-color";
+const CUT_COLOR_DEFAULT = "#4d8bff";
+const CUT_COLOR_VALID = new Set(["#4d8bff", "#000000", "#ff2d5a", "#e600ff", "#8a8a8a"]);
+
+function loadCutColor() {
+  const raw = localStorage.getItem(CUT_COLOR_KEY) || "";
+  return CUT_COLOR_VALID.has(raw) ? raw : CUT_COLOR_DEFAULT;
+}
+function saveCutColor(v) {
+  if (CUT_COLOR_VALID.has(v)) localStorage.setItem(CUT_COLOR_KEY, v);
+}
+function currentCutColor() {
+  const sel = $("#cut-color");
+  const v = sel?.value || CUT_COLOR_DEFAULT;
+  return CUT_COLOR_VALID.has(v) ? v : CUT_COLOR_DEFAULT;
+}
+
 // --- PNG raster DPI (only relevant when Format=PNGs). "auto" means match
 // the upscale Resolution so a 1200 DPI upscale isn't silently discarded
 // by rendering PNGs at 300 DPI. Persisted per-browser.
@@ -2052,10 +2090,14 @@ function runExport() {
   const format = $("#export-format")?.value || "pdf";
   const paper = currentPaper();
   const dpiTarget = currentDpiTarget();
+  const bleed = currentBleed();
+  const cutColor = currentCutColor();
   const { x: offsetX, y: offsetY } = currentOffsets();
   const params = new URLSearchParams({
     backs, upscale, quality, format, paper,
     dpi_target: String(dpiTarget),
+    bleed,
+    cut_color: cutColor,
     back_offset_x: String(offsetX),
     back_offset_y: String(offsetY),
   });
@@ -2809,6 +2851,20 @@ window.addEventListener("DOMContentLoaded", async () => {
   // PNG folder hint — copy button. The hint element itself is shown/hidden
   // by the export done handler.
   $("#png-folder-copy")?.addEventListener("click", copyPngFolderPath);
+
+  // --- Bleed dropdown ---------------------------------------------------
+  const bleedSel = $("#bleed");
+  if (bleedSel) {
+    bleedSel.value = loadBleed();
+    bleedSel.addEventListener("change", () => saveBleed(bleedSel.value));
+  }
+
+  // --- Cut-guide colour -------------------------------------------------
+  const cutColorSel = $("#cut-color");
+  if (cutColorSel) {
+    cutColorSel.value = loadCutColor();
+    cutColorSel.addEventListener("change", () => saveCutColor(cutColorSel.value));
+  }
 
   // --- Deck-grid zoom -----------------------------------------------------
   applyZoom(loadZoom());

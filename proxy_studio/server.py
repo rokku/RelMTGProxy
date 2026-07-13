@@ -702,7 +702,8 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
                     format: str = "pdf",
                     png_dpi: int = 300,
                     paper: str = "A4",
-                    dpi_target: int = 600) -> StreamingResponse:
+                    dpi_target: int = 600,
+                    bleed: float = 0.0) -> StreamingResponse:
         if cut_lines not in ("full", "ticks"):
             raise HTTPException(400, "cut_lines must be 'full' or 'ticks'")
         if backs not in ("none", "duplex", "separate"):
@@ -718,6 +719,8 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
             raise HTTPException(400, "png_dpi must be between 72 and 1200")
         if dpi_target not in (600, 1200):
             raise HTTPException(400, "dpi_target must be 600 or 1200")
+        if not 0.0 <= bleed <= 10.0:
+            raise HTTPException(400, "bleed must be between 0 and 10 mm")
         from .layout import PAPERS_MM
         if paper not in PAPERS_MM:
             raise HTTPException(400,
@@ -728,7 +731,14 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
             raise HTTPException(400, f"cut_color: {e}") from e
         state: AppState = app.state.picker
         project_name = _validate_name(name)
-        spec = PageSpec(paper=paper, gutter_mm=gutter, cut_line_mode=cut_lines)  # type: ignore[arg-type]
+        # Bleed needs room to extend into the gutter without overlapping
+        # the neighbouring card's bleed. Auto-widen rather than error out
+        # so users can turn bleed on without also having to remember the
+        # gutter constraint.
+        effective_gutter = max(gutter, 2 * bleed) if bleed > 0 else gutter
+        spec = PageSpec(paper=paper, gutter_mm=effective_gutter,
+                         cut_line_mode=cut_lines,
+                         bleed_mm=bleed)  # type: ignore[arg-type]
         want_upscale = UP.any_backend_installed() if upscale is None else upscale
         return StreamingResponse(
             _export_stream(state, project_name=project_name, spec=spec,

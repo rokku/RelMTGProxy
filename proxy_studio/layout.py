@@ -34,6 +34,14 @@ class PageSpec:
     # "full" draws page-edge-to-page-edge cut guides through the gutters.
     # "ticks" restricts guides to the margins only (spec §8 original mode).
     cut_line_mode: CutLineMode = "full"
+    # Extra mm of image drawn past each cut line. A miscut of up to
+    # `bleed_mm` on any edge just shows more art rather than a white
+    # sliver. Renderer scales each card's image up to
+    # `(63+2*bleed) x (88+2*bleed)` mm centred on its slot; cut lines
+    # stay at the true 63x88 boundaries. Requires `gutter_mm >= 2*bleed`
+    # so adjacent cards' bleeds don't overlap — the server auto-widens
+    # the gutter when this constraint isn't met.
+    bleed_mm: float = 0.0
 
     @property
     def page_size_mm(self) -> tuple[float, float]:

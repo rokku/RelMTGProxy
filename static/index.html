@@ -74,6 +74,24 @@
               <option value="Letter">US Letter</option>
             </select>
           </label>
+          <label id="bleed-picker" class="chip" title="Extra image around each card that extends past the cut line. Hides small miscuts — a 1 mm slip just shows more art rather than a white sliver. Enabling bleed auto-widens the gutter so adjacent cards' bleeds don't overlap.">
+            <span>Bleed</span>
+            <select id="bleed">
+              <option value="0">None</option>
+              <option value="2">2 mm</option>
+              <option value="3">3 mm (standard)</option>
+            </select>
+          </label>
+          <label id="guides-picker" class="chip" title="Colour of the cut guide lines. Pick a higher-contrast colour if the default blue is hard to see on your monitor or under your cutting light.">
+            <span>Guides</span>
+            <select id="cut-color">
+              <option value="#4d8bff">Blue (subtle)</option>
+              <option value="#000000">Black</option>
+              <option value="#ff2d5a">Red</option>
+              <option value="#e600ff">Magenta</option>
+              <option value="#8a8a8a">Grey</option>
+            </select>
+          </label>
           <label id="format-picker" class="chip" title="PDF is print-ready; PNGs give you one image per page for editing or sharing.">
             <span>Format</span>
             <select id="export-format">
