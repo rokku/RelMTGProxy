@@ -527,3 +527,24 @@ class TestSafeUploadName:
         assert srv._safe_upload_name("") == "upload"
         assert srv._safe_upload_name("...") == "upload"
         assert srv._safe_upload_name("   ") == "upload"
+
+
+class TestSlugifyProjectName:
+    @pytest.mark.parametrize("raw,expected", [
+        ("Mazirek Sacrifice", "mazirek_sacrifice"),
+        ("Cass, Hand of Vengeance", "cass_hand_of_vengeance"),
+        ("K'rrik, Son of Yawgmoth", "k_rrik_son_of_yawgmoth"),
+        ("Mr. House, President and CEO", "mr_house_president_and_ceo"),
+        ("Zurgo & Ojutai", "zurgo_ojutai"),
+        ("Feather, the Redeemed!", "feather_the_redeemed"),
+        ("test-2026", "test_2026"),
+        # Diacritics collapse to underscore — not ideal but acceptable for
+        # a folder name; the raw name is still displayed everywhere else.
+        ("Sétya, Roiling Storm", "s_tya_roiling_storm"),
+    ])
+    def test_common_cases(self, raw, expected):
+        assert srv._slugify_project_name(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["", "   ", "...", "…", "!!!"])
+    def test_falls_back_when_no_alphanumerics(self, raw):
+        assert srv._slugify_project_name(raw) == "project"

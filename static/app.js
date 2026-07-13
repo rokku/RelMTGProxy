@@ -2125,6 +2125,56 @@ function clearPngDownloads() {
     row.innerHTML = "";
     row.hidden = true;
   }
+  clearPngFolderHint();
+}
+
+function clearPngFolderHint() {
+  const box = $("#png-folder-hint");
+  const path = $("#png-folder-path");
+  const sub = $("#png-folder-hint-sub");
+  if (box) box.hidden = true;
+  if (path) path.textContent = "";
+  if (sub) sub.textContent = "";
+}
+
+// After a PNG export, show the on-disk folder path prominently so users
+// can open it in Finder / Explorer / Files rather than click-downloading
+// each page. `absPath` (may be undefined) is what we copy to the clipboard
+// because it's the fully-qualified path the OS file manager wants.
+function showPngFolderHint({ relPath, absPath, count, backsCount }) {
+  const box = $("#png-folder-hint");
+  const path = $("#png-folder-path");
+  const sub = $("#png-folder-hint-sub");
+  if (!box || !path || !relPath) return;
+  path.textContent = relPath;
+  path.dataset.absPath = absPath || relPath;
+  const total = (count || 0) + (backsCount || 0);
+  const parts = [];
+  if (count) parts.push(`${count} front page${count === 1 ? "" : "s"}`);
+  if (backsCount) parts.push(`${backsCount} back page${backsCount === 1 ? "" : "s"}`);
+  if (sub) sub.textContent = total
+    ? `— ${parts.join(" + ")}`
+    : "";
+  box.hidden = false;
+}
+
+async function copyPngFolderPath() {
+  const path = $("#png-folder-path");
+  const value = path?.dataset.absPath || path?.textContent || "";
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    toast("Folder path copied", "ok");
+  } catch {
+    // Fall back for browsers without the async Clipboard API — select
+    // the text so the user can Cmd+C / Ctrl+C themselves.
+    const range = document.createRange();
+    range.selectNodeContents(path);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    toast("Selected — press ⌘C / Ctrl+C to copy", "");
+  }
 }
 
 function renderPngDownloads(sel, serverPaths, labelPrefix) {
@@ -2410,6 +2460,12 @@ function handleExportEvent(evt, status) {
     status.className = "status ok";
     status.textContent = "done";
     if (data.format === "png") {
+      showPngFolderHint({
+        relPath: data.output_dir,
+        absPath: data.output_dir_abs,
+        count: data.page_count,
+        backsCount: data.backs_page_count,
+      });
       renderPngDownloads("#download-pngs-fronts", data.png_paths, "Fronts");
       renderPngDownloads("#download-pngs-backs", data.backs_png_paths, "Backs");
     } else {
@@ -2422,7 +2478,9 @@ function handleExportEvent(evt, status) {
       frontsCount: data.page_count,
       backsCount: data.backs_page_count,
     });
-    toast("Export complete — click to download", "ok");
+    toast(data.format === "png"
+      ? "Export complete — files saved to disk"
+      : "Export complete — click to download", "ok");
     maybeSuggestUpscaler();
   } else if (event === "error") {
     status.className = "status err";
@@ -2747,6 +2805,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   // Toggle chip visibility whenever the Format dropdown changes.
   $("#export-format")?.addEventListener("change", updatePngDpiChipVisibility);
   updatePngDpiChipVisibility();
+
+  // PNG folder hint — copy button. The hint element itself is shown/hidden
+  // by the export done handler.
+  $("#png-folder-copy")?.addEventListener("click", copyPngFolderPath);
 
   // --- Deck-grid zoom -----------------------------------------------------
   applyZoom(loadZoom());

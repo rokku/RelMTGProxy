@@ -384,10 +384,15 @@ def render_pdf_page_to_png_bytes(pdf_path: str | Path, page_index: int, *,
 
 def rasterise_pdf_to_pngs(pdf_path: str | Path, *,
                            dpi: int = 300,
-                           suffix_width: int = 2) -> list[Path]:
-    """Rasterise every page of `pdf_path` into a sibling PNG.
+                           suffix_width: int = 2,
+                           out_dir: str | Path | None = None) -> list[Path]:
+    """Rasterise every page of `pdf_path` into a PNG per page.
 
-    Output: `{stem}_p01.png`, `{stem}_p02.png`, … next to the source PDF.
+    Output: `{stem}_p01.png`, `{stem}_p02.png`, … Written next to the
+    source PDF by default; pass `out_dir` to route them into a specific
+    folder (created if missing) — used by the export flow to group all
+    of a project's PNGs under `output/{project_slug}/`.
+
     Returns the paths in page order. Overwrites existing files with the
     same names — callers are expected to pass a timestamped stem so old
     exports aren't clobbered.
@@ -395,6 +400,8 @@ def rasterise_pdf_to_pngs(pdf_path: str | Path, *,
     import pypdfium2 as pdfium  # heavy import; keep it lazy
 
     pdf_path = Path(pdf_path)
+    target_dir = Path(out_dir) if out_dir is not None else pdf_path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
     scale = dpi / 72.0  # 1 PDF canvas unit == 1/72 inch
     out_paths: list[Path] = []
     pdf = pdfium.PdfDocument(str(pdf_path))
@@ -406,9 +413,7 @@ def rasterise_pdf_to_pngs(pdf_path: str | Path, *,
                 image = bitmap.to_pil()
             finally:
                 page.close()
-            out = pdf_path.with_name(
-                f"{pdf_path.stem}_p{i + 1:0{suffix_width}d}.png"
-            )
+            out = target_dir / f"{pdf_path.stem}_p{i + 1:0{suffix_width}d}.png"
             # optimize=True quadruples encode time for a ~4% size win — skip it.
             image.save(out, format="PNG")
             out_paths.append(out)

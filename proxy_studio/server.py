@@ -872,6 +872,36 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
 
 # --- Helpers ----------------------------------------------------------------
 
+# Only these characters survive the project-slug pass; everything else
+# collapses to `_`. Keeps the slug filesystem-safe on every OS (no colons,
+# no separators, no reserved-name shenanigans on Windows either since the
+# slug ends up as a *folder* under `output/`, not a top-level device name).
+_SLUG_KEEP = re.compile(r"[a-z0-9]+")
+
+
+def _slugify_project_name(name: str) -> str:
+    """Return a lowercase, underscore-joined slug for use as a folder name.
+
+    Examples:
+      "Mazirek Sacrifice"      -> "mazirek_sacrifice"
+      "Cass, Hand of Vengeance"-> "cass_hand_of_vengeance"
+      "K'rrik, Son of Yawgmoth"-> "k_rrik_son_of_yawgmoth"
+
+    Non-alphanumeric characters collapse to underscore. If the name is
+    entirely non-alphanumeric (very rare, but e.g. "…"), falls back to
+    "project" so we don't return an empty folder name.
+    """
+    tokens = _SLUG_KEEP.findall((name or "").lower())
+    return "_".join(tokens) if tokens else "project"
+
+
+def _project_output_dir(project_name: str) -> Path:
+    """`output/{slug}/` for `project_name`, created if missing."""
+    d = OUTPUT_DIR / _slugify_project_name(project_name)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _resolve_output_path(rel_path: str) -> Path:
     """Resolve `rel_path` under `output/`, rejecting anything that escapes it.
 
@@ -1755,10 +1785,17 @@ async def _export_stream(state: AppState, *, project_name: str,
             yield _sse("progress", {"index": total, "total": total,
                                     "name": "", "phase": "rasterise"})
 
+            # Route PNGs into `output/{project_slug}/` so a deck's pages
+            # land grouped together on disk — much friendlier than 6-10
+            # loose files at the top of output/.
+            png_dir = _project_output_dir(project.name)
+
             def _rasterise() -> tuple[list[Path], list[Path]]:
-                fronts_pngs = rasterise_pdf_to_pngs(fronts_path, dpi=png_dpi)  # type: ignore[arg-type]
+                fronts_pngs = rasterise_pdf_to_pngs(
+                    fronts_path, dpi=png_dpi, out_dir=png_dir)  # type: ignore[arg-type]
                 backs_pngs = (
-                    rasterise_pdf_to_pngs(backs_path, dpi=png_dpi)  # type: ignore[arg-type]
+                    rasterise_pdf_to_pngs(
+                        backs_path, dpi=png_dpi, out_dir=png_dir)  # type: ignore[arg-type]
                     if backs_path else []
                 )
                 return fronts_pngs, backs_pngs
@@ -1773,6 +1810,10 @@ async def _export_stream(state: AppState, *, project_name: str,
                 "format": "png",
                 "png_paths": [str(p) for p in fronts_pngs],
                 "backs_png_paths": [str(p) for p in backs_pngs],
+                # Absolute + display-friendly folder path so the UI can
+                # tell the user where to look on disk.
+                "output_dir": str(png_dir),
+                "output_dir_abs": str(png_dir.resolve()),
                 # Handy for users who want the source too.
                 "path": str(fronts_path),
                 "backs_path": str(backs_path) if backs_path else None,

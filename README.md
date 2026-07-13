@@ -207,6 +207,11 @@ whatever the upscaler produced — 1200 DPI upscale + Auto = 1200 DPI
 PNGs, so no data gets thrown away. Set an explicit value for small
 previews (150) or archival-size files (1200 regardless of upscale).
 
+PNG exports land in **`output/{project_slug}/`** — one folder per deck,
+so all pages are grouped and easy to open in Finder / Explorer / your
+file manager without click-downloading each page. The UI shows the
+folder path with a copy button after export.
+
 ### After every export
 
 A thumbnail strip appears at the top of the page, one thumb per PDF

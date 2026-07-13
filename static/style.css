@@ -238,6 +238,32 @@ body {
 }
 .png-row-label { font-size: 12px; margin-right: 4px; }
 
+/* Prominent "PNGs saved to <folder>" hint after a PNG export. Users on
+   a local install can just open that folder in Finder / Explorer / Files
+   rather than click-downloading each page. */
+.png-folder-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid var(--border-brand);
+  border-radius: var(--r-md);
+  background: rgba(139,92,246,0.06);
+  font-size: 13px;
+}
+.png-folder-hint .folder-label { font-weight: 600; color: var(--text-1); }
+.png-folder-hint code {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(0,0,0,0.30);
+  color: var(--text-0);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
+  user-select: all;
+}
+.png-folder-hint .folder-hint-sub { font-size: 12px; }
+
 /* --- PDF preview strip -------------------------------------------------- */
 .pdf-preview {
   width: 100%;
