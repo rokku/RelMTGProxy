@@ -1831,9 +1831,28 @@ async def _export_stream(state: AppState, *, project_name: str,
                 "backs_page_count": len(backs_pngs),
             })
         else:
-            page_count = pdf_page_count(fronts_path) if fronts_path else 0
-            backs_page_count = (pdf_page_count(backs_path)
-                                if backs_path else 0)
+            # Compute page count from the card list rather than reading the
+            # produced PDF back. reportlab's 100 MB+ writes to disk aren't
+            # always fully flushed by the OS the microsecond `save()`
+            # returns, and pypdfium2 will then error with "Data format
+            # error" reading a still-buffered file. The math gives the same
+            # answer with zero I/O.
+            total_units = sum(rc.quantity for rc in render_cards)
+            per_page = spec.slots_per_page
+            page_count = (
+                -(-total_units // per_page) if total_units else 0
+            )
+            # In duplex mode the fronts PDF interleaves front+back pages,
+            # so it actually has 2x the front page count. Backs are None.
+            # In separate mode the backs PDF has the same page count as
+            # the fronts.
+            if backs_mode == "duplex":
+                page_count *= 2
+                backs_page_count = 0
+            elif backs_mode == "separate":
+                backs_page_count = page_count
+            else:
+                backs_page_count = 0
             yield _sse("done", {"format": "pdf",
                                  "path": str(fronts_path),
                                  "backs_path": str(backs_path) if backs_path else None,
