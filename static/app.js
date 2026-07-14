@@ -285,6 +285,18 @@ function updatePngDpiChipVisibility() {
   if (chip) chip.hidden = format !== "png";
 }
 
+// Mute the controls that have no effect under the current settings, so the
+// panel only ever shows live options. Quality/Print-DPI need upscaling on;
+// the back-alignment row needs a back mode selected.
+function refreshExportPanelState() {
+  const upscaleOn = $("#upscale-checkbox")?.checked;
+  for (const id of ["#quality-picker", "#dpi-picker"]) {
+    $(id)?.classList.toggle("is-muted", !upscaleOn);
+  }
+  const backsOn = ($("#backs-mode")?.value || "none") !== "none";
+  $("#align-controls")?.classList.toggle("is-muted", !backsOn);
+}
+
 // --- Deck-grid zoom --------------------------------------------------------
 const ZOOM_KEY = "relmtgproxy:deck-columns";
 const ZOOM_MIN = 2;
@@ -367,9 +379,23 @@ function setView(v) {
   $("#new-project").hidden = v !== "new";
   $("#deck-view").hidden = v !== "deck";
   const inDeck = v === "deck";
-  $("#upscale-group").hidden = !inDeck;
-  $("#backs-group").hidden = !inDeck;
-  $("#export-group").hidden = !inDeck;
+  // The export panel (and its narrow-screen drawer toggle) only make sense
+  // once a deck is open. Leaving the deck also dismisses an open drawer.
+  $("#export-panel").hidden = !inDeck;
+  $("#export-drawer-toggle").hidden = !inDeck;
+  if (!inDeck) closeExportDrawer();
+}
+
+// --- Export panel drawer (narrow screens only) -----------------------------
+function openExportDrawer() {
+  $("#export-panel")?.classList.add("open");
+  const bd = $("#export-backdrop");
+  if (bd) { bd.hidden = false; bd.classList.add("open"); }
+}
+function closeExportDrawer() {
+  $("#export-panel")?.classList.remove("open");
+  const bd = $("#export-backdrop");
+  if (bd) { bd.classList.remove("open"); bd.hidden = true; }
 }
 
 // --- Projects ---------------------------------------------------------------
@@ -2573,6 +2599,17 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#btn-cancel-export")?.addEventListener("click", cancelExport);
   $("#export-format")?.addEventListener("change", updateExportButtonLabel);
   updateExportButtonLabel();
+
+  // Export panel: narrow-screen drawer + live-option muting.
+  $("#export-drawer-toggle")?.addEventListener("click", openExportDrawer);
+  $("#export-drawer-close")?.addEventListener("click", closeExportDrawer);
+  $("#export-backdrop")?.addEventListener("click", closeExportDrawer);
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeExportDrawer();
+  });
+  $("#upscale-checkbox")?.addEventListener("change", refreshExportPanelState);
+  $("#backs-mode")?.addEventListener("change", refreshExportPanelState);
+  refreshExportPanelState();
   $("#btn-new-project").addEventListener("click", openNewProjectForm);
   $("#btn-hero-new")?.addEventListener("click", openNewProjectForm);
   $("#brand-link")?.addEventListener("click", (ev) => {

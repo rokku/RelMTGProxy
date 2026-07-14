@@ -21,133 +21,10 @@
                alt="RelMTG Proxy — Colorful Magic Proxy Generator">
         </a>
       </div>
-      <div class="actions">
-        <!-- Group 1: upscaling -->
-        <div class="chip-group" id="upscale-group" hidden>
-          <label id="upscale-toggle" class="chip" title="Upscale every card to the chosen print resolution before export">
-            <input type="checkbox" id="upscale-checkbox" checked>
-            <span id="upscale-label">Upscale</span>
-          </label>
-          <label id="quality-picker" class="chip" title="Trade quality against speed">
-            <span>Quality</span>
-            <select id="quality-mode">
-              <option value="quality">Best (x4plus)</option>
-              <option value="fast">Fast (x4plus-anime, ~4× faster)</option>
-              <option value="ultramix">Ultramix Balanced (Upscayl)</option>
-            </select>
-          </label>
-          <label id="dpi-picker" class="chip" title="Print resolution. 600 DPI is enough for any consumer inkjet or laser printer. 1200 DPI (raw 4× output, no downsample) is only worth it on high-end photo printers — files will be ~4× larger.">
-            <span>Resolution</span>
-            <select id="dpi-target">
-              <option value="600">600 DPI</option>
-              <option value="1200">1200 DPI (high-end printers)</option>
-            </select>
-          </label>
-        </div>
-        <!-- Group 2: back faces -->
-        <div class="chip-group" id="backs-group" hidden>
-          <label id="backs-picker" class="chip">
-            <span>Backs</span>
-            <select id="backs-mode">
-              <option value="none">None</option>
-              <option value="duplex">Duplex (interleaved)</option>
-              <option value="separate">Separate file</option>
-            </select>
-          </label>
-          <div id="align-controls" class="chip align-chip" title="If your printer misaligns fronts and backs, measure the drift with the alignment test and enter the offsets here (in mm).">
-            <span>Align</span>
-            <input id="back-offset-x" type="number" step="0.1" value="0" aria-label="Back offset X (mm)">
-            <span class="dim">×</span>
-            <input id="back-offset-y" type="number" step="0.1" value="0" aria-label="Back offset Y (mm)">
-            <button id="btn-align-test" class="ghost tiny-btn" type="button" title="Download a two-page duplex test PDF">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>
-              Test
-            </button>
-          </div>
-        </div>
-        <!-- Group 3: output + trigger -->
-        <div class="chip-group export-group" id="export-group" hidden>
-          <label id="paper-picker" class="chip" title="Page size for the exported PDF. Letter is shorter than A4, so a 3×3 grid at the default 3 mm gutter leaves only ~4.7 mm top/bottom margin — most printers will clip if you don't reduce the gutter or scale to fit.">
-            <span>Paper</span>
-            <select id="paper-size">
-              <option value="A4">A4</option>
-              <option value="Letter">US Letter</option>
-            </select>
-          </label>
-          <label id="guides-picker" class="chip" title="Colour of the cut guide lines. Pick a higher-contrast colour if the default blue is hard to see on your monitor or under your cutting light.">
-            <span>Guides</span>
-            <select id="cut-color">
-              <option value="#4d8bff">Blue (subtle)</option>
-              <option value="#000000">Black</option>
-              <option value="#ff2d5a">Red</option>
-              <option value="#e600ff">Magenta</option>
-              <option value="#8a8a8a">Grey</option>
-            </select>
-          </label>
-          <label id="guides-mode-picker" class="chip" title="Style of the cut guides. Full: page-edge-to-page-edge lines. Corners: small L-shaped trim marks at each card corner only — cleaner-looking, especially with bleed. Ticks: short ticks in the outer page margin only.">
-            <span>Style</span>
-            <select id="cut-lines-mode">
-              <option value="full">Full lines</option>
-              <option value="corners">Corners only</option>
-              <option value="ticks">Margin ticks</option>
-            </select>
-          </label>
-          <label id="bleed-picker" class="chip" title="Extra image around each card that extends past the cut line. Hides small miscuts — a 1 mm slip just shows more art or border rather than a white sliver. The original card image is NOT scaled; extra pixels are added around each source image by repeating the outer edge. Enabling bleed auto-widens the gutter so adjacent cards' bleeds don't overlap.">
-            <span>Bleed</span>
-            <select id="bleed">
-              <option value="0">None</option>
-              <option value="2">2 mm</option>
-              <option value="3">3 mm (standard)</option>
-            </select>
-          </label>
-          <label id="spacing-picker" class="chip" title="Gap between cards on the sheet. 3 mm (standard) leaves room to trim each card individually. None makes cards touch so adjacent cards share a single cut — far fewer passes on a guillotine cutter. Ignored when Bleed is on (bleed needs the gap to fill).">
-            <span>Spacing</span>
-            <select id="spacing">
-              <option value="3">3 mm (standard)</option>
-              <option value="0">None (touching)</option>
-            </select>
-          </label>
-          <label id="corner-picker" class="chip" title="Fill each card's rounded-corner die-cut with a solid colour so a physical corner-rounder whose radius doesn't match the card can't expose a white sliver. Black suits black-bordered cards; White suits old white-bordered cards. Off leaves the transparent corners as-is.">
-            <span>Corner fill</span>
-            <select id="corner-fill">
-              <option value="off">Off</option>
-              <option value="#000000">Black</option>
-              <option value="#ffffff">White</option>
-              <option value="#8a8a8a">Grey</option>
-            </select>
-          </label>
-          <label id="format-picker" class="chip" title="PDF is print-ready; PNGs give you one image per page for editing or sharing.">
-            <span>Format</span>
-            <select id="export-format">
-              <option value="pdf">PDF</option>
-              <option value="png">PNGs</option>
-            </select>
-          </label>
-          <label id="png-dpi-picker" class="chip" title="Resolution of the exported PNGs. Auto matches the upscale Resolution (600 or 1200 DPI). Higher-DPI PNGs are much larger files." hidden>
-            <span>PNG DPI</span>
-            <select id="png-dpi">
-              <option value="auto">Auto</option>
-              <option value="150">150</option>
-              <option value="300">300</option>
-              <option value="600">600</option>
-              <option value="1200">1200</option>
-            </select>
-          </label>
-          <button id="btn-export" class="primary">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 3v12"/><path d="m6 9 6-6 6 6"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>
-            </svg>
-            <span class="btn-label">Export PDF</span>
-          </button>
-          <button id="btn-cancel-export" class="ghost" hidden title="Stop this export — nothing is saved">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="6" y="6" width="12" height="12" rx="2"/>
-            </svg>
-            <span>Cancel</span>
-          </button>
-          <span id="export-status" class="status"></span>
-        </div>
-      </div>
+      <button id="export-drawer-toggle" class="ghost export-drawer-toggle" type="button" hidden aria-controls="export-panel" title="Show export options">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        Export options
+      </button>
     </div>
     <div class="topbar-downloads" id="downloads-bar">
       <a id="download-fronts" class="download-btn" href="" download hidden>
@@ -348,6 +225,150 @@
         <div id="deck-drop-hint" class="drop-hint" hidden>Drop images to add</div>
       </div>
     </section>
+    <aside id="export-panel" class="export-panel" hidden aria-label="Export options">
+      <div class="export-panel-head">
+        <h2 class="export-panel-title">Export</h2>
+        <button id="export-drawer-close" class="ghost icon-button export-drawer-only" type="button" aria-label="Close export options">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="export-panel-body">
+        <section class="panel-section">
+          <h3 class="panel-eyebrow">Output</h3>
+          <label id="format-picker" class="chip" title="PDF is print-ready; PNGs give you one image per page for editing or sharing.">
+            <span>Format</span>
+            <select id="export-format">
+              <option value="pdf">PDF</option>
+              <option value="png">PNGs</option>
+            </select>
+          </label>
+          <label id="png-dpi-picker" class="chip" title="Resolution of the exported PNGs. Auto matches the upscale Resolution (600 or 1200 DPI). Higher-DPI PNGs are much larger files." hidden>
+            <span>PNG DPI</span>
+            <select id="png-dpi">
+              <option value="auto">Auto</option>
+              <option value="150">150</option>
+              <option value="300">300</option>
+              <option value="600">600</option>
+              <option value="1200">1200</option>
+            </select>
+          </label>
+        </section>
+        <section class="panel-section">
+          <h3 class="panel-eyebrow">Resolution</h3>
+          <label id="upscale-toggle" class="chip" title="Upscale every card to the chosen print resolution before export">
+            <input type="checkbox" id="upscale-checkbox" checked>
+            <span id="upscale-label">Upscale</span>
+          </label>
+          <label id="quality-picker" class="chip" title="Trade quality against speed">
+            <span>Quality</span>
+            <select id="quality-mode">
+              <option value="quality">Best (x4plus)</option>
+              <option value="fast">Fast (x4plus-anime, ~4× faster)</option>
+              <option value="ultramix">Ultramix Balanced (Upscayl)</option>
+            </select>
+          </label>
+          <label id="dpi-picker" class="chip" title="Print resolution. 600 DPI is enough for any consumer inkjet or laser printer. 1200 DPI (raw 4× output, no downsample) is only worth it on high-end photo printers — files will be ~4× larger.">
+            <span>Resolution</span>
+            <select id="dpi-target">
+              <option value="600">600 DPI</option>
+              <option value="1200">1200 DPI (high-end printers)</option>
+            </select>
+          </label>
+        </section>
+        <section class="panel-section">
+          <h3 class="panel-eyebrow">Page</h3>
+          <label id="paper-picker" class="chip" title="Page size for the exported PDF. Letter is shorter than A4, so a 3×3 grid at the default 3 mm gutter leaves only ~4.7 mm top/bottom margin — most printers will clip if you don't reduce the gutter or scale to fit.">
+            <span>Paper</span>
+            <select id="paper-size">
+              <option value="A4">A4</option>
+              <option value="Letter">US Letter</option>
+            </select>
+          </label>
+          <label id="spacing-picker" class="chip" title="Gap between cards on the sheet. 3 mm (standard) leaves room to trim each card individually. None makes cards touch so adjacent cards share a single cut — far fewer passes on a guillotine cutter. Ignored when Bleed is on (bleed needs the gap to fill).">
+            <span>Spacing</span>
+            <select id="spacing">
+              <option value="3">3 mm (standard)</option>
+              <option value="0">None (touching)</option>
+            </select>
+          </label>
+          <label id="bleed-picker" class="chip" title="Extra image around each card that extends past the cut line. Hides small miscuts — a 1 mm slip just shows more art or border rather than a white sliver. The original card image is NOT scaled; extra pixels are added around each source image by repeating the outer edge. Enabling bleed auto-widens the gutter so adjacent cards' bleeds don't overlap.">
+            <span>Bleed</span>
+            <select id="bleed">
+              <option value="0">None</option>
+              <option value="2">2 mm</option>
+              <option value="3">3 mm (standard)</option>
+            </select>
+          </label>
+        </section>
+        <section class="panel-section">
+          <h3 class="panel-eyebrow">Cut &amp; trim</h3>
+          <label id="guides-mode-picker" class="chip" title="Style of the cut guides. Full: page-edge-to-page-edge lines. Corners: small L-shaped trim marks at each card corner only — cleaner-looking, especially with bleed. Ticks: short ticks in the outer page margin only.">
+            <span>Style</span>
+            <select id="cut-lines-mode">
+              <option value="full">Full lines</option>
+              <option value="corners">Corners only</option>
+              <option value="ticks">Margin ticks</option>
+            </select>
+          </label>
+          <label id="guides-picker" class="chip" title="Colour of the cut guide lines. Pick a higher-contrast colour if the default blue is hard to see on your monitor or under your cutting light.">
+            <span>Guides</span>
+            <select id="cut-color">
+              <option value="#4d8bff">Blue (subtle)</option>
+              <option value="#000000">Black</option>
+              <option value="#ff2d5a">Red</option>
+              <option value="#e600ff">Magenta</option>
+              <option value="#8a8a8a">Grey</option>
+            </select>
+          </label>
+          <label id="corner-picker" class="chip" title="Fill each card's rounded-corner die-cut with a solid colour so a physical corner-rounder whose radius doesn't match the card can't expose a white sliver. Black suits black-bordered cards; White suits old white-bordered cards. Off leaves the transparent corners as-is.">
+            <span>Corner fill</span>
+            <select id="corner-fill">
+              <option value="off">Off</option>
+              <option value="#000000">Black</option>
+              <option value="#ffffff">White</option>
+              <option value="#8a8a8a">Grey</option>
+            </select>
+          </label>
+        </section>
+        <section class="panel-section">
+          <h3 class="panel-eyebrow">Card backs</h3>
+          <label id="backs-picker" class="chip">
+            <span>Backs</span>
+            <select id="backs-mode">
+              <option value="none">None</option>
+              <option value="duplex">Duplex (interleaved)</option>
+              <option value="separate">Separate file</option>
+            </select>
+          </label>
+          <div id="align-controls" class="chip align-chip" title="If your printer misaligns fronts and backs, measure the drift with the alignment test and enter the offsets here (in mm).">
+            <span>Align</span>
+            <input id="back-offset-x" type="number" step="0.1" value="0" aria-label="Back offset X (mm)">
+            <span class="dim">×</span>
+            <input id="back-offset-y" type="number" step="0.1" value="0" aria-label="Back offset Y (mm)">
+            <button id="btn-align-test" class="ghost tiny-btn" type="button" title="Download a two-page duplex test PDF">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>
+              Test
+            </button>
+          </div>
+        </section>
+      </div>
+      <div class="export-panel-foot">
+        <button id="btn-export" class="primary">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3v12"/><path d="m6 9 6-6 6 6"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>
+            </svg>
+            <span class="btn-label">Export PDF</span>
+          </button>
+        <button id="btn-cancel-export" class="ghost" hidden title="Stop this export — nothing is saved">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="6" y="6" width="12" height="12" rx="2"/>
+            </svg>
+            <span>Cancel</span>
+          </button>
+        <span id="export-status" class="status"></span>
+      </div>
+    </aside>
+    <div id="export-backdrop" class="export-backdrop" hidden></div>
   </main>
 
   <!-- Printings picker (modal) -->
