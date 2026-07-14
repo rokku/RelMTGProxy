@@ -162,20 +162,25 @@ def corner_fill_image(src: str | Path,
                       *, corner_mm: float = CORNER_RADIUS_MM,
                       card_w_mm: float = L.CARD_W_MM,
                       card_h_mm: float = L.CARD_H_MM) -> Path:
-    """Return a copy of `src` with its rounded-corner die-cut filled solid.
+    """Return a copy of `src` with its rounded corners filled solid.
 
     `fill_rgb` is a 0..1 RGB triple (same convention as `cut_color`). The
     point is to prevent a physical corner-rounder whose radius doesn't match
     the card from exposing a white/transparent sliver: after this pass the
-    image is opaque all the way into each corner, so any leftover is the
-    fill colour (black by default) rather than page white.
+    image is the fill colour (black by default) all the way into each corner.
 
-    Scryfall PNGs carry a precise transparent die-cut, so where an alpha
-    channel is present we composite over the fill colour — that targets
-    *exactly* the cut-away region and never encroaches on the card face.
-    For images without alpha (e.g. after an upscale backend that flattens
-    to RGB) we fall back to filling the four corners outside a rounded
-    rectangle of the standard MTG corner radius. Cached under
+    We always blacken (fill) the corners out to `corner_mm` — a rounded
+    rectangle mask, cutting a hair into the card edge. This is deliberately
+    more aggressive than filling just the transparent die-cut, because that
+    exact fill leaves a visible "silver line": the card scan carries its own
+    thin light rim right at the die-cut edge (opaque, so alpha compositing
+    keeps it), and upscale backends flatten the die-cut to solid white that
+    reaches slightly past the nominal radius. Filling to `corner_mm` (≈ a
+    corner-rounder's own radius) swallows both.
+
+    Where an alpha channel is present (Scryfall's transparent PNGs) we
+    composite over the fill colour first, so the transparent die-cut and its
+    anti-aliased edge flatten cleanly before the corner fill. Cached under
     `cache/images/corner/`.
     """
     import hashlib
@@ -186,8 +191,10 @@ def corner_fill_image(src: str | Path,
     except OSError:
         key_src = str(src)
     rgb255 = tuple(max(0, min(255, int(round(c * 255)))) for c in fill_rgb)
+    # v2: switched from "fill only the transparent die-cut" to "always fill
+    # the corner out to corner_mm" — bump so old cache entries are ignored.
     key = hashlib.sha1(
-        f"v1:{key_src}:{rgb255}:{corner_mm}".encode("utf-8")).hexdigest()[:16]
+        f"v2:{key_src}:{rgb255}:{corner_mm}".encode("utf-8")).hexdigest()[:16]
     out = CORNER_FILL_CACHE_DIR / f"{key}.png"
     if out.exists() and out.stat().st_size > 0:
         return out
@@ -197,22 +204,23 @@ def corner_fill_image(src: str | Path,
         has_alpha = im.mode in ("RGBA", "LA") or (
             im.mode == "P" and "transparency" in im.info)
         if has_alpha:
+            # Flatten the transparent die-cut onto the fill colour first, so
+            # semi-transparent edge pixels blend cleanly instead of leaving a
+            # halo once we hard-fill the corner below.
             im = im.convert("RGBA")
-            result = Image.new("RGB", im.size, rgb255)
-            # Alpha as the paste mask: semi-transparent die-cut edge pixels
-            # blend into the fill, giving a clean anti-aliased corner.
-            result.paste(im, mask=im.getchannel("A"))
+            base = Image.new("RGB", im.size, rgb255)
+            base.paste(im, mask=im.getchannel("A"))
         else:
-            result = im.convert("RGB")
-            w, h = result.size
-            # Card aspect matches the image aspect, so mm→px is uniform;
-            # derive the radius from the width and reuse for both axes.
-            r_px = max(1, int(round(corner_mm * (w / card_w_mm))))
-            mask = Image.new("L", (w, h), 0)
-            ImageDraw.Draw(mask).rounded_rectangle(
-                (0, 0, w - 1, h - 1), radius=r_px, fill=255)
-            fill_layer = Image.new("RGB", (w, h), rgb255)
-            result = Image.composite(result, fill_layer, mask)
+            base = im.convert("RGB")
+        w, h = base.size
+        # Card aspect matches the image aspect, so mm→px is uniform; derive
+        # the radius from the width and reuse it for both axes.
+        r_px = max(1, int(round(corner_mm * (w / card_w_mm))))
+        mask = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            (0, 0, w - 1, h - 1), radius=r_px, fill=255)
+        fill_layer = Image.new("RGB", (w, h), rgb255)
+        result = Image.composite(base, fill_layer, mask)
         tmp = out.with_suffix(
             f".{hashlib.sha1(str(out).encode()).hexdigest()[:8]}.tmp")
         result.save(tmp, format="PNG")

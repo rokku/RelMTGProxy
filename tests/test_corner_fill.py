@@ -100,6 +100,34 @@ def test_no_white_sliver_on_flattened_die_cut(tmp_path):
     assert near_white == 0, f"silver line survived: {near_white} near-white px"
 
 
+def test_no_light_rim_survives_on_alpha_card(tmp_path):
+    """Regression: card scans carry a thin light rim right at the die-cut
+    edge (opaque, so an alpha composite keeps it) — that rim is the visible
+    'silver line'. Corner-fill must blacken a hair into the card edge so the
+    rim is gone, not just fill the transparent region outside it."""
+    w, h = 745, 1040
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))     # transparent
+    card_mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(card_mask).rounded_rectangle(
+        (0, 0, w - 1, h - 1), radius=26, fill=255)   # ~2.2 mm die-cut
+    card = Image.new("RGBA", (w, h), (15, 15, 15, 255))
+    im.paste(card, (0, 0), card_mask)
+    # A bright rim tracing the die-cut edge — the silver line.
+    ImageDraw.Draw(im).rounded_rectangle(
+        (0, 0, w - 1, h - 1), radius=26, outline=(230, 230, 230, 255), width=3)
+    src = tmp_path / "rimmed.png"
+    im.save(src)
+
+    out = P.corner_fill_image(src, (0.0, 0.0, 0.0))
+    res = Image.open(out).convert("RGB")
+    # Scan the corner square only (< die-cut radius): the rounded arc rim
+    # lives here. Straight-edge rim (x or y ≥ 26) is out of scope — that's a
+    # card-edge concern for bleed, not corner rounding.
+    light = sum(1 for y in range(24) for x in range(24)
+                if min(res.getpixel((x, y))) > 200)
+    assert light == 0, f"silver rim survived in corner: {light} light px"
+
+
 def test_idempotent_cache_hit_returns_same_path(tmp_path):
     src = tmp_path / "card.png"
     _rgba_with_transparent_corners().save(src)
