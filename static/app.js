@@ -2089,11 +2089,24 @@ function updateExportButtonLabel() {
   if (label) label.textContent = format === "png" ? "Export PNGs" : "Export PDF";
 }
 
+// Holds the in-flight export's AbortController so the Cancel button can tear
+// down its SSE stream. Aborting stops the client read; modern Starlette sees
+// the disconnect and stops the server generator at the next card boundary
+// (nothing is written to disk for a cancelled run).
+let exportAbort = null;
+
+function cancelExport() {
+  if (exportAbort) exportAbort.abort();
+}
+
 function runExport() {
   if (!state.activeProject) return;
   const btn = $("#btn-export");
+  const cancelBtn = $("#btn-cancel-export");
   const status = $("#export-status");
   btn.disabled = true;
+  if (cancelBtn) cancelBtn.hidden = false;
+  exportAbort = new AbortController();
   status.className = "status";
   status.textContent = "starting…";
 
@@ -2128,6 +2141,7 @@ function runExport() {
   }
   fetch(`/api/projects/${encodeURIComponent(state.activeProject)}/export?${params}`, {
     method: "POST",
+    signal: exportAbort.signal,
   }).then(async (resp) => {
     if (!resp.ok || !resp.body) {
       throw new Error(`${resp.status} ${resp.statusText}`);
@@ -2147,9 +2161,20 @@ function runExport() {
       }
     }
   }).catch((e) => {
-    status.className = "status err";
-    status.textContent = `error: ${e.message}`;
-  }).finally(() => { btn.disabled = false; });
+    // AbortError is the user clicking Cancel — a deliberate stop, not a fault.
+    if (e.name === "AbortError") {
+      status.className = "status warn";
+      status.textContent = "cancelled";
+      toast("Export cancelled", "");
+    } else {
+      status.className = "status err";
+      status.textContent = `error: ${e.message}`;
+    }
+  }).finally(() => {
+    btn.disabled = false;
+    if (cancelBtn) cancelBtn.hidden = true;
+    exportAbort = null;
+  });
 }
 
 function parseSSE(raw) {
@@ -2495,6 +2520,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#filter-entries").addEventListener("input", (e) => { state.entryFilter = e.target.value; renderDeckGrid(); });
   $("#btn-load-more").addEventListener("click", loadMorePrintings);
   $("#btn-export").addEventListener("click", runExport);
+  $("#btn-cancel-export")?.addEventListener("click", cancelExport);
   $("#export-format")?.addEventListener("change", updateExportButtonLabel);
   updateExportButtonLabel();
   $("#btn-new-project").addEventListener("click", openNewProjectForm);

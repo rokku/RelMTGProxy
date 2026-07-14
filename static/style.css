@@ -397,6 +397,7 @@ button.icon-button svg { flex: 0 0 auto; }
 .status { color: var(--text-2); font-size: 12.5px; min-width: 6em; font-variant-numeric: tabular-nums; }
 .status.ok { color: var(--ok); }
 .status.err { color: var(--danger); }
+.status.warn { color: var(--warn); }
 
 /* --- Layout ------------------------------------------------------------- */
 .layout {
