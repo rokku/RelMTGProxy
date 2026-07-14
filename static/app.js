@@ -2102,7 +2102,6 @@ function runExport() {
   $("#download-fronts").hidden = true;
   $("#download-backs").hidden = true;
   clearPngDownloads();
-  clearPdfPreview();
 
   const backs = $("#backs-mode")?.value || "none";
   const upscale = $("#upscale-checkbox")?.checked ? "true" : "false";
@@ -2289,93 +2288,6 @@ async function maybeSuggestUpscaler() {
   localStorage.setItem(UPSCALER_HINT_KEY, "1");
 }
 
-// --- PDF preview strip -----------------------------------------------------
-// Called from the export `done` handler for PDF (and PNG — the source PDF is
-// still returned, so previewing that too gives a consistent one-strip UI).
-function clearPdfPreview() {
-  const strip = $("#pdf-preview-strip");
-  const box = $("#pdf-preview");
-  if (strip) strip.innerHTML = "";
-  if (box) box.hidden = true;
-  const hint = $("#pdf-preview-hint");
-  if (hint) hint.textContent = "";
-}
-
-function renderPdfPreview({ frontsPath, backsPath, frontsCount, backsCount }) {
-  const strip = $("#pdf-preview-strip");
-  const box = $("#pdf-preview");
-  const hint = $("#pdf-preview-hint");
-  if (!strip || !box) return;
-  strip.innerHTML = "";
-  const total = (frontsCount || 0) + (backsCount || 0);
-  if (!total || !frontsPath) {
-    box.hidden = true;
-    return;
-  }
-  const spec = [
-    { path: frontsPath, count: frontsCount, prefix: "F", kind: "" },
-    { path: backsPath, count: backsCount, prefix: "B", kind: "backs" },
-  ];
-  for (const group of spec) {
-    if (!group.path || !group.count) continue;
-    for (let i = 1; i <= group.count; i++) {
-      // Thumb is ~78×110 CSS px — 40 DPI (330×470 physical px) is already
-      // 4× the display size and keeps the payload ~50 KB. Lightbox at 150 DPI
-      // (~1240×1750) gives a crisp full-screen view without a monster PNG.
-      const thumbUrl = `/api/pdf-preview?path=${encodeURIComponent(group.path)}&page=${i}&dpi=40`;
-      const fullUrl = `/api/pdf-preview?path=${encodeURIComponent(group.path)}&page=${i}&dpi=150`;
-      const pageDownloadUrl = `/api/pdf-page?path=${encodeURIComponent(group.path)}&page=${i}`;
-      const label = `${group.prefix}${i}`;
-      const caption = `${group.kind ? "Back" : "Front"} page ${i} · ${group.path.split("/").pop()}`;
-      const wrap = el("div", { class: `pdf-preview-thumb${group.kind ? " " + group.kind : ""}` },
-        el("button", {
-          type: "button",
-          class: "pdf-preview-zoom",
-          title: `Zoom ${caption}`,
-          onclick: () => openPdfPreviewLightbox(fullUrl, caption),
-        },
-          el("img", { src: thumbUrl, alt: caption, loading: "lazy" }),
-        ),
-        el("div", { class: "pdf-preview-thumb-actions" },
-          el("span", { class: "thumb-label" }, label),
-          el("a", {
-            class: "thumb-download",
-            href: pageDownloadUrl,
-            download: "",
-            title: `Download just page ${i} as PDF`,
-            "aria-label": `Download page ${i}`,
-          }, "PDF"),
-        ),
-      );
-      strip.append(wrap);
-    }
-  }
-  if (hint) {
-    const parts = [];
-    if (frontsCount) parts.push(`${frontsCount} front page${frontsCount === 1 ? "" : "s"}`);
-    if (backsCount) parts.push(`${backsCount} back page${backsCount === 1 ? "" : "s"}`);
-    hint.textContent = parts.join(" · ") + " — click a thumb to zoom";
-  }
-  box.hidden = false;
-}
-
-function openPdfPreviewLightbox(url, caption) {
-  const dlg = $("#pdf-preview-lightbox");
-  const img = $("#pdf-preview-lightbox-img");
-  const cap = $("#pdf-preview-lightbox-caption");
-  if (!dlg || !img) return;
-  img.src = url;
-  if (cap) cap.textContent = caption || "";
-  if (!dlg.open) dlg.showModal();
-}
-
-function closePdfPreviewLightbox() {
-  const dlg = $("#pdf-preview-lightbox");
-  const img = $("#pdf-preview-lightbox-img");
-  if (dlg?.open) dlg.close();
-  if (img) img.src = "";  // stop loading a large image if it's still in flight
-}
-
 // --- Upscaler model manager -----------------------------------------------
 async function openUpscalerModelsModal() {
   const dlg = $("#upscalerModelsModal") || $("#upscaler-models-modal");
@@ -2536,12 +2448,6 @@ function handleExportEvent(evt, status) {
       showDownload("#download-fronts", data.path);
       if (data.backs_path) showDownload("#download-backs", data.backs_path);
     }
-    renderPdfPreview({
-      frontsPath: data.path,
-      backsPath: data.backs_path,
-      frontsCount: data.page_count,
-      backsCount: data.backs_page_count,
-    });
     toast(data.format === "png"
       ? "Export complete — files saved to disk"
       : "Export complete — click to download", "ok");
@@ -2679,17 +2585,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#upscale-test-lightbox-close")?.addEventListener("click", closeUpscaleLightbox);
   upLb?.addEventListener("click", (ev) => {
     if (ev.target === upLb) closeUpscaleLightbox();
-  });
-
-  // PDF preview lightbox
-  const pdfLb = $("#pdf-preview-lightbox");
-  $("#pdf-preview-lightbox-close")?.addEventListener("click", closePdfPreviewLightbox);
-  pdfLb?.addEventListener("click", (ev) => {
-    if (ev.target === pdfLb) closePdfPreviewLightbox();
-  });
-  pdfLb?.addEventListener("cancel", (ev) => {
-    ev.preventDefault();
-    closePdfPreviewLightbox();
   });
 
   // Upscaler-models modal

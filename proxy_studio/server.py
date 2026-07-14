@@ -44,9 +44,9 @@ from . import upscale as UP
 from .layout import PageSpec
 from .pdf_export import (
     DEFAULT_CUT_COLOR, RenderCard, bleed_image, default_output_path,
-    extract_pdf_page_bytes, parse_hex_color,
+    parse_hex_color,
     pdf_page_count, rasterise_pdf_to_pngs, render_pdf,
-    render_pdf_page_to_png_bytes, render_registration_test,
+    render_registration_test,
 )
 from .project import Entry, Project, SelectedPrint
 
@@ -753,53 +753,6 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
             media_type="text/event-stream",
         )
 
-    # --- Post-export preview + per-page download ---------------------------
-    @app.get("/api/pdf-preview")
-    def pdf_preview(path: str, page: int = 1, dpi: int = 90) -> "Response":
-        """Rasterise one page of a produced PDF to a PNG.
-
-        `path` must resolve inside `output/` — no arbitrary filesystem
-        access. `dpi` is capped at 200 to keep preview payloads small.
-        """
-        from fastapi import Response
-        if not 40 <= dpi <= 200:
-            raise HTTPException(400, "dpi must be between 40 and 200")
-        pdf_path = _resolve_output_path(path)
-        try:
-            data = render_pdf_page_to_png_bytes(pdf_path, page - 1, dpi=dpi)
-        except IndexError as e:
-            raise HTTPException(404, str(e)) from e
-        # Preview PNGs are safe to cache aggressively — the source PDF's
-        # filename is timestamped, so a URL uniquely identifies its content.
-        return Response(
-            content=data, media_type="image/png",
-            headers={"Cache-Control": "public, max-age=86400, immutable"},
-        )
-
-    @app.get("/api/pdf-page")
-    def pdf_page_download(path: str, page: int = 1) -> "Response":
-        """Return a single-page PDF split from a produced export.
-
-        Useful for "reprint just page 3 after a paper jam" — extracts the
-        chosen page in-memory and streams it as a download, no server-side
-        artefacts left behind.
-        """
-        from fastapi import Response
-        pdf_path = _resolve_output_path(path)
-        try:
-            data = extract_pdf_page_bytes(pdf_path, page - 1)
-        except IndexError as e:
-            raise HTTPException(404, str(e)) from e
-        stem = pdf_path.stem
-        filename = f"{stem}_p{page:02d}.pdf"
-        return Response(
-            content=data, media_type="application/pdf",
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Cache-Control": "public, max-age=3600",
-            },
-        )
-
     # --- Upscaler model manager -------------------------------------------
     @app.get("/api/upscaler/status")
     def upscaler_status() -> dict[str, Any]:
@@ -910,30 +863,6 @@ def _project_output_dir(project_name: str) -> Path:
     d = OUTPUT_DIR / _slugify_project_name(project_name)
     d.mkdir(parents=True, exist_ok=True)
     return d
-
-
-def _resolve_output_path(rel_path: str) -> Path:
-    """Resolve `rel_path` under `output/`, rejecting anything that escapes it.
-
-    Accepts both `foo.pdf` and `output/foo.pdf` (the export `done` event returns
-    the latter, so this keeps client code trivial).
-    """
-    if not rel_path:
-        raise HTTPException(400, "path is required")
-    root = OUTPUT_DIR.resolve()
-    cleaned = rel_path.lstrip("/")
-    if cleaned.startswith("output/"):
-        cleaned = cleaned[len("output/"):]
-    candidate = (root / cleaned).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as e:
-        raise HTTPException(400, "path must be under output/") from e
-    if not candidate.exists() or not candidate.is_file():
-        raise HTTPException(404, f"file not found: {rel_path}")
-    if candidate.suffix.lower() != ".pdf":
-        raise HTTPException(400, "path must point to a PDF")
-    return candidate
 
 
 async def _stream_upload_to_disk(uf: "UploadFile", target: Path,
