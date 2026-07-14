@@ -37,12 +37,8 @@ log = logging.getLogger(__name__)
 # concurrent calls to `PdfDocument(...).get_page(...)` race inside the
 # font enumeration and double-free a shared vector, aborting the process
 # with "pointer being freed was not allocated". This lock serialises
-# every pypdfium2 entry point in this module.
-#
-# When the UI's PDF preview strip renders 9 <img> tags at once, the
-# browser fires 6-8 parallel requests to /api/pdf-preview, each of
-# which enters pypdfium2 on its own anyio worker thread. Without this
-# lock, the server aborts a few seconds after "done" fires.
+# every pypdfium2 entry point in this module so PNG rasterisation and
+# page-count reads can't run concurrently on separate worker threads.
 _PDFIUM_LOCK = threading.Lock()
 
 BacksMode = Literal["none", "duplex", "separate"]
@@ -146,6 +142,82 @@ def bleed_image(src: str | Path, bleed_mm: float) -> Path:
     """Public wrapper around `_get_bled_image` — callers pre-generating
     bleed for use with `render_pdf(already_bled=True)`."""
     return _get_bled_image(Path(src), bleed_mm)
+
+
+# Corner radius for the geometric fallback (RGB images with no alpha to
+# composite — e.g. after an upscale backend flattens the transparent die-cut
+# to solid white). Scryfall's die-cut is only ~2.2 mm, but two effects mean
+# the fill radius must be larger: (a) an upscaler's flattened white reaches
+# ~2.45 mm, and (b) PIL's rounded_rectangle keeps a few px inside the nominal
+# radius, so a 2.5 mm mask leaves a white hair right at the curve. 3.2 mm
+# (⅛", a typical corner-rounder radius) swallows the white die-cut with
+# margin, so the black lands well inside where a physical rounder will cut.
+CORNER_RADIUS_MM: float = 3.2
+
+CORNER_FILL_CACHE_DIR = Path("cache/images/corner")
+
+
+def corner_fill_image(src: str | Path,
+                      fill_rgb: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                      *, corner_mm: float = CORNER_RADIUS_MM,
+                      card_w_mm: float = L.CARD_W_MM,
+                      card_h_mm: float = L.CARD_H_MM) -> Path:
+    """Return a copy of `src` with its rounded-corner die-cut filled solid.
+
+    `fill_rgb` is a 0..1 RGB triple (same convention as `cut_color`). The
+    point is to prevent a physical corner-rounder whose radius doesn't match
+    the card from exposing a white/transparent sliver: after this pass the
+    image is opaque all the way into each corner, so any leftover is the
+    fill colour (black by default) rather than page white.
+
+    Scryfall PNGs carry a precise transparent die-cut, so where an alpha
+    channel is present we composite over the fill colour — that targets
+    *exactly* the cut-away region and never encroaches on the card face.
+    For images without alpha (e.g. after an upscale backend that flattens
+    to RGB) we fall back to filling the four corners outside a rounded
+    rectangle of the standard MTG corner radius. Cached under
+    `cache/images/corner/`.
+    """
+    import hashlib
+    CORNER_FILL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    src = Path(src)
+    try:
+        key_src = str(src.resolve())
+    except OSError:
+        key_src = str(src)
+    rgb255 = tuple(max(0, min(255, int(round(c * 255)))) for c in fill_rgb)
+    key = hashlib.sha1(
+        f"v1:{key_src}:{rgb255}:{corner_mm}".encode("utf-8")).hexdigest()[:16]
+    out = CORNER_FILL_CACHE_DIR / f"{key}.png"
+    if out.exists() and out.stat().st_size > 0:
+        return out
+
+    from PIL import Image, ImageDraw
+    with Image.open(src) as im:
+        has_alpha = im.mode in ("RGBA", "LA") or (
+            im.mode == "P" and "transparency" in im.info)
+        if has_alpha:
+            im = im.convert("RGBA")
+            result = Image.new("RGB", im.size, rgb255)
+            # Alpha as the paste mask: semi-transparent die-cut edge pixels
+            # blend into the fill, giving a clean anti-aliased corner.
+            result.paste(im, mask=im.getchannel("A"))
+        else:
+            result = im.convert("RGB")
+            w, h = result.size
+            # Card aspect matches the image aspect, so mm→px is uniform;
+            # derive the radius from the width and reuse for both axes.
+            r_px = max(1, int(round(corner_mm * (w / card_w_mm))))
+            mask = Image.new("L", (w, h), 0)
+            ImageDraw.Draw(mask).rounded_rectangle(
+                (0, 0, w - 1, h - 1), radius=r_px, fill=255)
+            fill_layer = Image.new("RGB", (w, h), rgb255)
+            result = Image.composite(result, fill_layer, mask)
+        tmp = out.with_suffix(
+            f".{hashlib.sha1(str(out).encode()).hexdigest()[:8]}.tmp")
+        result.save(tmp, format="PNG")
+        tmp.replace(out)
+    return out
 
 
 # Back-compat alias — existing callers use `render_fronts_pdf(...)`.

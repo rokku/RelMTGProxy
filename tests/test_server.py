@@ -550,3 +550,34 @@ class TestSlugifyProjectName:
     @pytest.mark.parametrize("raw", ["", "   ", "...", "…", "!!!"])
     def test_falls_back_when_no_alphanumerics(self, raw):
         assert srv._slugify_project_name(raw) == "project"
+
+
+class TestExportParamValidation:
+    """The export endpoint rejects out-of-range geometry / bad colours before
+    it does any work, so a typo can't kick off a doomed render."""
+
+    def test_rejects_gutter_over_max(self, seeded_client):
+        r = seeded_client.post("/api/projects/unit/export?gutter=25")
+        assert r.status_code == 400
+        assert "gutter" in r.text
+
+    def test_rejects_negative_gutter(self, seeded_client):
+        r = seeded_client.post("/api/projects/unit/export?gutter=-1")
+        assert r.status_code == 400
+        assert "gutter" in r.text
+
+    def test_rejects_bad_corner_color(self, seeded_client):
+        r = seeded_client.post(
+            "/api/projects/unit/export?corner_fill=true&corner_color=notacolour")
+        assert r.status_code == 400
+        assert "corner_color" in r.text
+
+    def test_accepts_touching_gutter_and_corner_fill(self, seeded_client):
+        # gutter=0 (touching) + corner fill must pass validation. The stream
+        # itself may error later (offline fake client has no images), but the
+        # request must not be rejected up front with a 400.
+        with seeded_client.stream(
+            "POST",
+            "/api/projects/unit/export?gutter=0&corner_fill=true&corner_color=%23000000",
+        ) as r:
+            assert r.status_code == 200

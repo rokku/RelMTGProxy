@@ -43,8 +43,8 @@ from . import scryfall as SF
 from . import upscale as UP
 from .layout import PageSpec
 from .pdf_export import (
-    DEFAULT_CUT_COLOR, RenderCard, bleed_image, default_output_path,
-    parse_hex_color,
+    DEFAULT_CUT_COLOR, RenderCard, bleed_image, corner_fill_image,
+    default_output_path, parse_hex_color,
     pdf_page_count, rasterise_pdf_to_pngs, render_pdf,
     render_registration_test,
 )
@@ -703,7 +703,9 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
                     png_dpi: int = 300,
                     paper: str = "A4",
                     dpi_target: int = 600,
-                    bleed: float = 0.0) -> StreamingResponse:
+                    bleed: float = 0.0,
+                    corner_fill: bool = False,
+                    corner_color: str = "#000000") -> StreamingResponse:
         if cut_lines not in ("full", "ticks", "corners"):
             raise HTTPException(400,
                 "cut_lines must be 'full', 'ticks' or 'corners'")
@@ -722,6 +724,8 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
             raise HTTPException(400, "dpi_target must be 600 or 1200")
         if not 0.0 <= bleed <= 10.0:
             raise HTTPException(400, "bleed must be between 0 and 10 mm")
+        if not 0.0 <= gutter <= 20.0:
+            raise HTTPException(400, "gutter must be between 0 and 20 mm")
         from .layout import PAPERS_MM
         if paper not in PAPERS_MM:
             raise HTTPException(400,
@@ -730,11 +734,17 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
             color = parse_hex_color(cut_color)
         except ValueError as e:
             raise HTTPException(400, f"cut_color: {e}") from e
+        try:
+            corner_rgb = parse_hex_color(corner_color)
+        except ValueError as e:
+            raise HTTPException(400, f"corner_color: {e}") from e
         state: AppState = app.state.picker
         project_name = _validate_name(name)
         # Bleed extends into the gutter — auto-widen the gutter to
         # `2*bleed` so adjacent cards' bleeds don't overlap. The user
-        # doesn't have to remember the constraint.
+        # doesn't have to remember the constraint. `gutter=0` (touching
+        # cards, for shared guillotine cuts) is honoured only when bleed
+        # is off, since bleed needs the room.
         effective_gutter = max(gutter, 2 * bleed) if bleed > 0 else gutter
         spec = PageSpec(paper=paper, gutter_mm=effective_gutter,
                          cut_line_mode=cut_lines,
@@ -749,7 +759,9 @@ def _register_routes(app: FastAPI) -> None:  # noqa: C901 — single dispatch ta
                            back_offset=(back_offset_x, back_offset_y),
                            output_format=format,
                            png_dpi=png_dpi,
-                           dpi_target=dpi_target),
+                           dpi_target=dpi_target,
+                           corner_fill_on=corner_fill,
+                           corner_color=corner_rgb),
             media_type="text/event-stream",
         )
 
@@ -1476,6 +1488,8 @@ async def _export_stream(state: AppState, *, project_name: str,
                           output_format: str = "pdf",
                           png_dpi: int = 300,
                           dpi_target: int = 600,
+                          corner_fill_on: bool = False,
+                          corner_color: tuple[float, float, float] = (0.0, 0.0, 0.0),
                           ) -> AsyncIterator[bytes]:
     def _sse(event: str, data: dict[str, Any]) -> bytes:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
@@ -1689,6 +1703,27 @@ async def _export_stream(state: AppState, *, project_name: str,
                                             name=entry.name,
                                             quantity=entry.quantity,
                                             back_image_path=back_path))
+
+        # Fill rounded-corner die-cuts (if enabled) before bleed, so the
+        # blackened corner pixel is what the bleed edge-repeat extends
+        # outward. Same synchronous-PIL rationale as the bleed block below.
+        if corner_fill_on:
+            yield _sse("progress", {"index": total, "total": total,
+                                    "name": "", "phase": "corner"})
+            filled_cards: list[RenderCard] = []
+            for rc in render_cards:
+                front_filled = corner_fill_image(rc.image_path, corner_color)
+                back_filled: Path | None = None
+                if rc.back_image_path is not None:
+                    back_filled = corner_fill_image(rc.back_image_path,
+                                                    corner_color)
+                filled_cards.append(RenderCard(
+                    image_path=front_filled,
+                    name=rc.name,
+                    quantity=rc.quantity,
+                    back_image_path=back_filled,
+                ))
+            render_cards = filled_cards
 
         # Pre-generate bleed padding (if enabled) here, synchronously,
         # inside the async task. Deliberately NOT using

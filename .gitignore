@@ -15,6 +15,7 @@ cache/images/upscaled/*
 cache/images/custom/*
 cache/images/backs/*
 cache/images/bled/*
+cache/images/corner/*
 !cache/api/.gitkeep
 !cache/images/original/.gitkeep
 !cache/images/upscaled/.gitkeep

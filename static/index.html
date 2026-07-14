@@ -100,6 +100,22 @@
               <option value="3">3 mm (standard)</option>
             </select>
           </label>
+          <label id="spacing-picker" class="chip" title="Gap between cards on the sheet. 3 mm (standard) leaves room to trim each card individually. None makes cards touch so adjacent cards share a single cut — far fewer passes on a guillotine cutter. Ignored when Bleed is on (bleed needs the gap to fill).">
+            <span>Spacing</span>
+            <select id="spacing">
+              <option value="3">3 mm (standard)</option>
+              <option value="0">None (touching)</option>
+            </select>
+          </label>
+          <label id="corner-picker" class="chip" title="Fill each card's rounded-corner die-cut with a solid colour so a physical corner-rounder whose radius doesn't match the card can't expose a white sliver. Black suits black-bordered cards; White suits old white-bordered cards. Off leaves the transparent corners as-is.">
+            <span>Corner fill</span>
+            <select id="corner-fill">
+              <option value="off">Off</option>
+              <option value="#000000">Black</option>
+              <option value="#ffffff">White</option>
+              <option value="#8a8a8a">Grey</option>
+            </select>
+          </label>
           <label id="format-picker" class="chip" title="PDF is print-ready; PNGs give you one image per page for editing or sharing.">
             <span>Format</span>
             <select id="export-format">

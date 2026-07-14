@@ -129,10 +129,9 @@ Once the browser page opens:
    directly to the printed pages.
 6. **Choose paper size** (A4 or US Letter) and **resolution** from the
    top toolbar. Defaults are A4 at 600 DPI.
-7. **Hit `Export PDF`**. When it finishes, a green download button and
-   a thumbnail strip of each page appear at the top. Click a thumb to
-   zoom, or the small "PDF" tag next to it to download just that page
-   (useful for reprinting one sheet after a paper jam).
+7. **Hit `Export PDF`**. When it finishes, a green download button
+   appears at the top. If you change your mind mid-render (wrong DPI,
+   say), hit **Cancel** next to Export to stop it — nothing is saved.
 
 Prints are laid out 3×3 per sheet at the correct MTG card size
 (63 × 88 mm) with cut guides between each card.
@@ -142,10 +141,22 @@ but if you find it hard to see under your cutting lamp or on a busy
 card face, pick Black / Red / Magenta / Grey from the **Guides**
 dropdown in the toolbar.
 
+**Spacing** sets the gap between cards. The default **3 mm** leaves room
+to trim each card on its own. **None (touching)** butts cards edge-to-
+edge so a single cut separates two neighbours — far fewer passes on a
+guillotine cutter. (Spacing is ignored when **Bleed** is on, since bleed
+needs the gap to fill.)
+
+**Corner fill** paints each card's rounded-corner die-cut a solid colour
+so a physical corner-rounder whose radius doesn't quite match the card
+can't leave a white sliver. Pick **Black** for black-bordered cards or
+**White** for old white-bordered ones; leave it **Off** to keep the
+transparent corners as-is.
+
 > **Letter users, heads-up:** at the default 3 mm gutter, Letter leaves
-> only ~4.7 mm top/bottom margin — most printers will clip. Drop the
-> gutter to 0 in the toolbar, or scale to fit, if your printer refuses
-> to print that close to the edge.
+> only ~4.7 mm top/bottom margin — most printers will clip. Set
+> **Spacing → None** in the toolbar, or scale to fit, if your printer
+> refuses to print that close to the edge.
 
 ## Which settings should I use?
 
@@ -217,14 +228,19 @@ so all pages are grouped and easy to open in Finder / Explorer / your
 file manager without click-downloading each page. The UI shows the
 folder path with a copy button after export.
 
+### Guillotine / paper-cutter workflow
+
+Set **Spacing → None (touching)** with **Bleed → None**. Cards butt
+edge-to-edge, so each cut through the sheet separates two cards at once
+— roughly half the passes of a spaced layout. Add **Corner fill →
+Black** if you round corners afterwards and want any leftover sliver to
+read as black rather than white.
+
 ### After every export
 
-A thumbnail strip appears at the top of the page, one thumb per PDF
-page. **Click a thumb** for a full-screen zoom, or the small **PDF**
-tag next to it to download **just that page** — handy for reprinting
-after a paper jam, without regenerating the whole deck.
-
-The green download button next to it grabs the full PDF as usual.
+The green download button grabs the full PDF. PNG exports instead show
+the **`output/{project_slug}/`** folder path with a copy button, so you
+can open the whole page set in your file manager at once.
 
 ---
 

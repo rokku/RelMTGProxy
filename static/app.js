@@ -215,6 +215,46 @@ function currentCutColor() {
   return CUT_COLOR_VALID.has(v) ? v : CUT_COLOR_DEFAULT;
 }
 
+// --- Card spacing (gutter). "None (touching)" makes adjacent cards share a
+// single guillotine cut — fewer passes on a paper cutter. Kept at 3 mm by
+// default (the project's paper-trimmer convention). Persisted per-browser.
+const SPACING_KEY = "relmtgproxy:spacing";
+const SPACING_DEFAULT = "3";
+const SPACING_VALID = new Set(["0", "3"]);
+
+function loadSpacing() {
+  const raw = localStorage.getItem(SPACING_KEY) || "";
+  return SPACING_VALID.has(raw) ? raw : SPACING_DEFAULT;
+}
+function saveSpacing(v) {
+  if (SPACING_VALID.has(v)) localStorage.setItem(SPACING_KEY, v);
+}
+function currentSpacing() {
+  const sel = $("#spacing");
+  const v = sel?.value || SPACING_DEFAULT;
+  return SPACING_VALID.has(v) ? v : SPACING_DEFAULT;
+}
+
+// --- Corner fill. "off" disables; any other value is the #rrggbb colour
+// composited into each card's rounded-corner die-cut so a physical corner-
+// rounder can't expose a white sliver. Default off. Persisted per-browser.
+const CORNER_FILL_KEY = "relmtgproxy:corner-fill";
+const CORNER_FILL_DEFAULT = "off";
+const CORNER_FILL_VALID = new Set(["off", "#000000", "#ffffff", "#8a8a8a"]);
+
+function loadCornerFill() {
+  const raw = localStorage.getItem(CORNER_FILL_KEY) || "";
+  return CORNER_FILL_VALID.has(raw) ? raw : CORNER_FILL_DEFAULT;
+}
+function saveCornerFill(v) {
+  if (CORNER_FILL_VALID.has(v)) localStorage.setItem(CORNER_FILL_KEY, v);
+}
+function currentCornerFill() {
+  const sel = $("#corner-fill");
+  const v = sel?.value || CORNER_FILL_DEFAULT;
+  return CORNER_FILL_VALID.has(v) ? v : CORNER_FILL_DEFAULT;
+}
+
 // --- PNG raster DPI (only relevant when Format=PNGs). "auto" means match
 // the upscale Resolution so a 1200 DPI upscale isn't silently discarded
 // by rendering PNGs at 300 DPI. Persisted per-browser.
@@ -2124,6 +2164,8 @@ function runExport() {
   const dpiTarget = currentDpiTarget();
   const cutColor = currentCutColor();
   const bleed = currentBleed();
+  const spacing = currentSpacing();
+  const cornerFill = currentCornerFill();
   const { x: offsetX, y: offsetY } = currentOffsets();
   const params = new URLSearchParams({
     backs, upscale, quality, format, paper,
@@ -2131,9 +2173,16 @@ function runExport() {
     cut_color: cutColor,
     cut_lines: currentCutLinesMode(),
     bleed,
+    gutter: spacing,
     back_offset_x: String(offsetX),
     back_offset_y: String(offsetY),
   });
+  // Corner fill: only send when enabled; the colour rides along so the
+  // server fills the die-cut with the user's chosen colour.
+  if (cornerFill !== "off") {
+    params.set("corner_fill", "true");
+    params.set("corner_color", cornerFill);
+  }
   // Only send png_dpi when the user actually asked for PNGs — no point
   // making the server rasterise a PDF export it isn't going to produce.
   if (format === "png") {
@@ -2452,6 +2501,7 @@ function handleExportEvent(evt, status) {
     status.textContent = `exporting ${data.total} cards${mode}…`;
   } else if (event === "progress") {
     if (data.phase === "render") status.textContent = "rendering PDF…";
+    else if (data.phase === "corner") status.textContent = "filling corners…";
     else if (data.phase === "bleed") status.textContent = "adding bleed…";
     else if (data.phase === "rasterise") status.textContent = "rasterising PNGs…";
     else if (data.phase === "upscale") status.textContent = `upscale ${data.index + 1}/${data.total}: ${data.name}`;
@@ -2814,6 +2864,20 @@ window.addEventListener("DOMContentLoaded", async () => {
   if (bleedSel) {
     bleedSel.value = loadBleed();
     bleedSel.addEventListener("change", () => saveBleed(bleedSel.value));
+  }
+
+  // --- Card spacing (gutter) --------------------------------------------
+  const spacingSel = $("#spacing");
+  if (spacingSel) {
+    spacingSel.value = loadSpacing();
+    spacingSel.addEventListener("change", () => saveSpacing(spacingSel.value));
+  }
+
+  // --- Corner fill ------------------------------------------------------
+  const cornerFillSel = $("#corner-fill");
+  if (cornerFillSel) {
+    cornerFillSel.value = loadCornerFill();
+    cornerFillSel.addEventListener("change", () => saveCornerFill(cornerFillSel.value));
   }
 
   // --- Deck-grid zoom -----------------------------------------------------
