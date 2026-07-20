@@ -200,7 +200,7 @@ function currentBleed() {
 // the server accepts any #rrggbb via cli.py if a power user wants more.
 const CUT_COLOR_KEY = "relmtgproxy:cut-color";
 const CUT_COLOR_DEFAULT = "#4d8bff";
-const CUT_COLOR_VALID = new Set(["#4d8bff", "#000000", "#ff2d5a", "#e600ff", "#8a8a8a"]);
+const CUT_COLOR_VALID = new Set(["#4d8bff", "#000000", "#ff2d5a", "#e600ff", "#00e000", "#8a8a8a"]);
 
 function loadCutColor() {
   const raw = localStorage.getItem(CUT_COLOR_KEY) || "";
